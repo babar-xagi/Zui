@@ -8,7 +8,7 @@ pub const InvalidateHandler = *const fn () void;
 
 pub const AppOptions = struct {
     app_name: []const u8 = "ZUI App",
-    root: *const fn () Node,
+    root: *const fn () Element,
 };
 
 pub const LayoutDirection = enum {
@@ -37,7 +37,8 @@ pub const TextNode = struct {
 pub const ClickHandler = *const fn () void;
 
 pub const ButtonOptions = struct {
-    label: []const u8,
+    title: ?[]const u8 = null,
+    label: ?[]const u8 = null,
     on_click: ?ClickHandler = null,
 };
 
@@ -116,6 +117,8 @@ pub const Node = union(enum) {
     }
 };
 
+pub const Element = Node;
+
 pub fn State(comptime T: type) type {
     return struct {
         value: T,
@@ -133,6 +136,10 @@ pub fn State(comptime T: type) type {
             invalidate();
         }
     };
+}
+
+pub fn state(comptime T: type, initial: T) State(T) {
+    return State(T).init(initial);
 }
 
 pub fn run(options: AppOptions) !void {
@@ -161,7 +168,11 @@ fn setInvalidator(handler: ?InvalidateHandler) void {
     active_invalidator = handler;
 }
 
-pub fn view(style: ViewStyle, children: anytype) Node {
+pub fn view(children: anytype) Element {
+    return makeView(.{}, children);
+}
+
+fn makeView(style: ViewStyle, children: anytype) Element {
     const allocator = active_allocator orelse @panic("zui.view must be called inside zui.run for now");
     const fields = std.meta.fields(@TypeOf(children));
     const child_nodes = allocator.alloc(Node, fields.len) catch @panic("out of memory");
@@ -178,19 +189,19 @@ pub fn view(style: ViewStyle, children: anytype) Node {
     };
 }
 
-pub fn column(style: ViewStyle, children: anytype) Node {
+pub fn column(style: ViewStyle, children: anytype) Element {
     var column_style = style;
     column_style.direction = .column;
-    return view(column_style, children);
+    return makeView(column_style, children);
 }
 
-pub fn row(style: ViewStyle, children: anytype) Node {
+pub fn row(style: ViewStyle, children: anytype) Element {
     var row_style = style;
     row_style.direction = .row;
-    return view(row_style, children);
+    return makeView(row_style, children);
 }
 
-pub fn text(value: []const u8) Node {
+pub fn text(value: []const u8) Element {
     return .{
         .text = .{
             .value = value,
@@ -198,10 +209,16 @@ pub fn text(value: []const u8) Node {
     };
 }
 
-pub fn button(options: ButtonOptions) Node {
+pub fn textFmt(comptime format: []const u8, args: anytype) Element {
+    const allocator = active_allocator orelse @panic("zui.textFmt must be called inside zui.run for now");
+    return text(std.fmt.allocPrint(allocator, format, args) catch @panic("out of memory"));
+}
+
+pub fn button(options: ButtonOptions) Element {
+    const title = options.title orelse options.label orelse @panic("zui.button requires .title");
     return .{
         .button = .{
-            .label = options.label,
+            .label = title,
             .on_click = options.on_click,
         },
     };
@@ -211,7 +228,7 @@ pub fn stateText(
     comptime T: type,
     state_value: *const State(T),
     formatter: *const fn (T, std.mem.Allocator) []const u8,
-) Node {
+) Element {
     const allocator = active_allocator orelse @panic("zui.stateText must be called inside zui.run for now");
 
     const Binding = struct {
@@ -253,33 +270,39 @@ test "text creates a text node" {
 }
 
 test "button creates a button node" {
-    const node = button(.{ .label = "Press" });
+    const node = button(.{ .title = "Press" });
     try std.testing.expectEqualStrings("Press", node.button.label);
     try std.testing.expectEqual(@as(?ClickHandler, null), node.button.on_click);
 }
 
+test "button still accepts label as a compatibility name" {
+    const node = button(.{ .label = "Press" });
+    try std.testing.expectEqualStrings("Press", node.button.label);
+}
+
 test "state stores and updates a value" {
-    var counter = State(i32).init(3);
+    var counter = state(i32, 3);
     try std.testing.expectEqual(@as(i32, 3), counter.get());
 
     counter.set(4);
     try std.testing.expectEqual(@as(i32, 4), counter.get());
 }
 
-test "view stores children in the active build arena" {
+test "view stores children in the active build arena with default style" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
     active_allocator = arena.allocator();
     defer active_allocator = null;
 
-    const node = view(.{ .gap = 8, .padding = 12 }, .{
+    const node = view(.{
         text("A"),
         text("B"),
     });
 
-    try std.testing.expectEqual(@as(u16, 8), node.view.style.gap);
-    try std.testing.expectEqual(@as(u16, 12), node.view.style.padding);
+    try std.testing.expectEqual(@as(u16, 0), node.view.style.gap);
+    try std.testing.expectEqual(@as(u16, 0), node.view.style.padding);
+    try std.testing.expectEqual(LayoutDirection.column, node.view.style.direction);
     try std.testing.expectEqual(@as(usize, 2), node.view.children.len);
     try std.testing.expectEqualStrings("A", node.view.children[0].text.value);
     try std.testing.expectEqualStrings("B", node.view.children[1].text.value);
@@ -310,8 +333,8 @@ test "firstText returns first nested text node" {
     active_allocator = arena.allocator();
     defer active_allocator = null;
 
-    const node = view(.{}, .{
-        view(.{}, .{
+    const node = view(.{
+        view(.{
             text("Nested"),
         }),
         text("Later"),
@@ -321,8 +344,19 @@ test "firstText returns first nested text node" {
 }
 
 test "firstText can use a button label" {
-    const node = button(.{ .label = "Launch" });
+    const node = button(.{ .title = "Launch" });
     try std.testing.expectEqualStrings("Launch", node.firstText().?);
+}
+
+test "textFmt formats text with the active build arena" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    active_allocator = arena.allocator();
+    defer active_allocator = null;
+
+    const node = textFmt("Count: {}", .{@as(i32, 5)});
+    try std.testing.expectEqualStrings("Count: 5", node.text.value);
 }
 
 test "stateText renders current state through a formatter" {
@@ -338,7 +372,7 @@ test "stateText renders current state through a formatter" {
         }
     };
 
-    var counter = State(i32).init(7);
+    var counter = state(i32, 7);
     const node = stateText(i32, &counter, Formatter.render);
     try std.testing.expectEqualStrings("Count: 7", node.text.value);
 
@@ -355,9 +389,9 @@ test "textCount counts nested text nodes" {
     active_allocator = arena.allocator();
     defer active_allocator = null;
 
-    const node = view(.{}, .{
+    const node = view(.{
         text("A"),
-        view(.{}, .{
+        view(.{
             text("B"),
             text("C"),
         }),
@@ -373,12 +407,12 @@ test "controlCount counts native text and button controls" {
     active_allocator = arena.allocator();
     defer active_allocator = null;
 
-    const node = view(.{}, .{
+    const node = view(.{
         text("A"),
-        button(.{ .label = "B" }),
-        view(.{}, .{
+        button(.{ .title = "B" }),
+        view(.{
             text("C"),
-            button(.{ .label = "D" }),
+            button(.{ .title = "D" }),
         }),
     });
 

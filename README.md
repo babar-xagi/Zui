@@ -5,16 +5,16 @@ ZUI is a new from-scratch cross-platform UI framework written in Zig 0.16.
 The goal is a small, fast, native framework with an API that feels easy to learn:
 
 ```zig
-const zui = @import("zui");
+const ui = @import("zui");
 
-fn HomeScreen() zui.Node {
-    return zui.view(.{}, .{
-        zui.text("Hello World!"),
+fn HomeScreen() ui.Element {
+    return ui.view(.{
+        ui.text("Hello World!"),
     });
 }
 
 pub fn main() !void {
-    try zui.run(.{
+    try ui.run(.{
         .app_name = "Hello ZUI",
         .root = HomeScreen,
     });
@@ -25,7 +25,15 @@ Capy is used only as reference material. ZUI is not a Capy fork and does not dep
 
 ## Current Status
 
-Milestone 3 is underway. ZUI now has `column` and `row` layout helpers, and the Win32 backend relayouts native text controls when the window is resized.
+ZUI now has a native Win32 backend, text, layout, buttons, a tiny state model, and a cleaner declarative API:
+
+- `ui.Element`
+- `ui.view(.{ ... })`
+- `ui.text(...)`
+- `ui.textFmt(...)`
+- `ui.button(.{ .title = "..." })`
+- `ui.state(T, initial)`
+- `ui.stateText(...)`
 
 Development notes are kept in [docs/development](docs/development).
 
@@ -34,6 +42,9 @@ Development notes are kept in [docs/development](docs/development).
 ```powershell
 zig build test
 zig build run
+zig build run-button
+zig build run-counter
+zig build run-declarative
 ```
 
-On Windows, `zig build run` opens a native window with the text nodes from `examples/hello.zig`. Resize the window to see the simple relayout, then close it to end the app.
+On Windows, these commands open native windows. Close the window to end the app.

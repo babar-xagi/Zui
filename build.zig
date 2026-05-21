@@ -80,6 +80,29 @@ pub fn build(b: *std.Build) void {
     const run_counter_step = b.step("run-counter", "Run the phase 005 state counter example");
     run_counter_step.dependOn(&run_state_counter.step);
 
+    const declarative_api = b.addExecutable(.{
+        .name = "zui-006-declarative-api",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/006_declarative_api.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zui", .module = zui_mod },
+            },
+        }),
+    });
+    addPlatformLinks(declarative_api.root_module, target);
+    b.installArtifact(declarative_api);
+
+    const run_declarative_api = b.addRunArtifact(declarative_api);
+    run_declarative_api.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_declarative_api.addArgs(args);
+    }
+
+    const run_declarative_step = b.step("run-declarative", "Run the phase 006 declarative API example");
+    run_declarative_step.dependOn(&run_declarative_api.step);
+
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/zui.zig"),
         .target = target,
