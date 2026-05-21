@@ -397,6 +397,15 @@ pub fn stateText(
     state_value: *const State(T),
     formatter: *const fn (T, std.mem.Allocator) []const u8,
 ) Element {
+    return styledStateText(T, state_value, formatter, .{});
+}
+
+pub fn styledStateText(
+    comptime T: type,
+    state_value: *const State(T),
+    formatter: *const fn (T, std.mem.Allocator) []const u8,
+    style: TextStyle,
+) Element {
     const allocator = active_allocator orelse @panic("zui.stateText must be called inside zui.run for now");
 
     const Binding = struct {
@@ -422,6 +431,7 @@ pub fn stateText(
                 .context = binding,
                 .render = Binding.render,
             },
+            .style = style,
         },
     };
 }
@@ -620,6 +630,32 @@ test "stateText renders current state through a formatter" {
     const dynamic = node.text.dynamic.?;
     const next_value = dynamic.render(dynamic.context, arena.allocator());
     try std.testing.expectEqualStrings("Count: 8", next_value);
+}
+
+test "styledStateText stores text style" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    active_allocator = arena.allocator();
+    defer active_allocator = null;
+
+    const Formatter = struct {
+        fn render(value: i32, allocator: std.mem.Allocator) []const u8 {
+            return std.fmt.allocPrint(allocator, "Value: {}", .{value}) catch @panic("out of memory");
+        }
+    };
+
+    var value = state(i32, 12);
+    const node = styledStateText(i32, &value, Formatter.render, .{
+        .fg = colors.blue_600,
+        .size = 18,
+        .weight = .bold,
+    });
+
+    try std.testing.expectEqualStrings("Value: 12", node.text.value);
+    try std.testing.expectEqual(colors.blue_600.b, node.text.style.foreground().?.b);
+    try std.testing.expectEqual(@as(u16, 18), node.text.style.fontSize());
+    try std.testing.expectEqual(FontWeight.bold, node.text.style.fontWeight());
 }
 
 test "textCount counts nested text nodes" {

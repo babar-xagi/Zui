@@ -34,6 +34,7 @@ ZUI now has a native Win32 backend, text, layout, buttons, a tiny state model, e
 - `ui.button(.{ .title = "..." })`
 - `ui.state(T, initial)`
 - `ui.stateText(...)`
+- `ui.styledStateText(...)`
 - `ui.styledText(...)`
 - `ui.t("Text", .{ .fg = ..., .size = ... })`
 - `ui.colors`

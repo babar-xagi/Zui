@@ -30,8 +30,8 @@ fn resetDemo() void {
 
 fn hero() ui.Element {
     return ui.column(.{ .p = 22, .gap = 10, .bg = c.slate_50 }, .{
-        ui.t("ZUI First Demo", .{ .fg = c.slate_900, .size = 28, .weight = .bold }),
-        ui.t("Tiny Zig code. Native controls. Reactive state.", .{ .fg = c.slate_700, .size = 16 }),
+        ui.t("ZUI Studio", .{ .fg = c.slate_900, .size = 30, .weight = .bold }),
+        ui.t("A tiny native app shell built with clean Zig UI code.", .{ .fg = c.slate_700, .size = 16 }),
         ui.row(.{ .gap = 10 }, .{
             ui.t("Native", .{ .fg = c.white, .bg = c.emerald_600, .size = 15, .weight = .semibold }),
             ui.t("Small", .{ .fg = c.white, .bg = c.blue_600, .size = 15, .weight = .semibold }),
@@ -43,21 +43,28 @@ fn hero() ui.Element {
 fn metrics() ui.Element {
     return ui.column(.{ .p = 18, .gap = 10, .bg = c.slate_100 }, .{
         ui.t("Live project pulse", .{ .fg = c.slate_900, .size = 20, .weight = .semibold }),
-        ui.stateText(i32, &focus, focusLabel),
-        ui.stateText(i32, &shipped, shippedLabel),
-        ui.t("Buttons below update these native text controls.", .{ .fg = c.slate_700, .size = 14 }),
+        ui.styledStateText(i32, &focus, focusLabel, .{ .fg = c.blue_600, .size = 18, .weight = .bold }),
+        ui.styledStateText(i32, &shipped, shippedLabel, .{ .fg = c.emerald_600, .size = 18, .weight = .bold }),
+        ui.t("Buttons below update these native text controls in place.", .{ .fg = c.slate_700, .size = 14 }),
     });
 }
 
-fn roadmap() ui.Element {
+fn toolkit() ui.Element {
     return ui.column(.{ .p = 18, .m = 4, .gap = 10, .bg = c.slate_50 }, .{
-        ui.t("What this demo uses", .{ .fg = c.slate_900, .size = 20, .weight = .semibold }),
+        ui.t("Toolkit snapshot", .{ .fg = c.slate_900, .size = 20, .weight = .semibold }),
         ui.row(.{ .gap = 10 }, .{
             ui.t("Layout", .{ .fg = c.white, .bg = c.blue_600, .size = 15 }),
             ui.t("Style", .{ .fg = c.white, .bg = c.emerald_600, .size = 15 }),
             ui.t("State", .{ .fg = c.white, .bg = c.amber_500, .size = 15 }),
         }),
-        ui.t("The screen is built from column, row, text, button, colors, and state.", .{ .fg = c.slate_700, .size = 15 }),
+        ui.t("Column, row, styled text, buttons, colors, and reactive labels are all native.", .{ .fg = c.slate_700, .size = 15 }),
+    });
+}
+
+fn nextSteps() ui.Element {
+    return ui.column(.{ .p = 18, .gap = 8, .bg = c.slate_50 }, .{
+        ui.t("Next polish targets", .{ .fg = c.slate_900, .size = 20, .weight = .semibold }),
+        ui.t("Text input, alignment, per-side spacing, and custom button drawing.", .{ .fg = c.slate_700, .size = 15 }),
     });
 }
 
@@ -74,15 +81,16 @@ fn App() ui.Element {
         hero(),
         ui.row(.{ .gap = 14 }, .{
             metrics(),
-            roadmap(),
+            toolkit(),
         }),
+        nextSteps(),
         actions(),
     });
 }
 
 pub fn main() !void {
     try ui.run(.{
-        .app_name = "ZUI First Demo",
+        .app_name = "ZUI Studio Demo",
         .root = App,
     });
 }

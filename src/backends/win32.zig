@@ -140,6 +140,7 @@ const WS_CHILD = 0x40000000;
 const WS_VISIBLE = 0x10000000;
 const WM_DESTROY = 0x0002;
 const WM_PAINT = 0x000F;
+const WM_ERASEBKGND = 0x0014;
 const WM_SIZE = 0x0005;
 const WM_COMMAND = 0x0111;
 const WM_SETFONT = 0x0030;
@@ -155,6 +156,7 @@ const default_window_width = 800;
 const default_window_height = 600;
 const default_text_height = 28;
 const default_button_height = 34;
+const estimated_text_width_percent = 58;
 const first_control_id = 1000;
 
 extern "kernel32" fn GetModuleHandleW(lpModuleName: ?LPCWSTR) callconv(.winapi) HINSTANCE;
@@ -452,8 +454,23 @@ fn createFont(allocator: std.mem.Allocator, style: anytype) !HFONT {
 }
 
 fn textHeight(style: anytype) i32 {
+    return textLineHeight(style);
+}
+
+fn textLineHeight(style: anytype) i32 {
     const size: i32 = @intCast(style.fontSize());
-    return @max(default_text_height, size + 12);
+    return @max(default_text_height, size + 10);
+}
+
+fn estimatedTextHeight(value: []const u8, style: anytype, available_width: i32) i32 {
+    const line_height = textLineHeight(style);
+    if (available_width <= 0 or value.len == 0) return line_height;
+
+    const size: i32 = @intCast(style.fontSize());
+    const estimated_char_width = @max(6, @divTrunc(size * estimated_text_width_percent, 100));
+    const chars_per_line: usize = @intCast(@max(1, @divTrunc(available_width, estimated_char_width)));
+    const line_count = @max(@as(usize, 1), std.math.divCeil(usize, value.len, chars_per_line) catch 1);
+    return line_height * @as(i32, @intCast(line_count));
 }
 
 fn buttonHeight(style: anytype) i32 {
@@ -611,7 +628,7 @@ fn relayoutWindow(comptime Node: type, state: *BackendState(Node), hwnd: HWND) v
     var next_control_index: usize = 0;
     var next_view_index: usize = 0;
     _ = layoutNode(Node, state, state.root, &next_control_index, &next_view_index, rect, null);
-    _ = InvalidateRect(hwnd, null, 1);
+    _ = InvalidateRect(hwnd, null, 0);
 }
 
 fn refreshWindow(comptime Node: type, state: *BackendState(Node), hwnd: HWND) !void {
@@ -669,7 +686,7 @@ fn toWin32Rect(rect: LayoutRect) RECT {
 
 fn measureNode(comptime Node: type, node: Node, available_width: i32) i32 {
     return switch (node) {
-        .text => |text_node| textHeight(text_node.style),
+        .text => |text_node| estimatedTextHeight(text_node.value, text_node.style, available_width),
         .button => |button_node| buttonHeight(button_node.style),
         .view => |view_node| {
             const padding: i32 = @intCast(view_node.style.paddingValue());
@@ -680,15 +697,20 @@ fn measureNode(comptime Node: type, node: Node, available_width: i32) i32 {
             const content_height = switch (view_node.style.direction) {
                 .column => blk: {
                     var height = padding * 2 + gap * @as(i32, @intCast(view_node.children.len - 1));
+                    const child_width = @max(1, available_width - padding * 2 - margin * 2);
                     for (view_node.children) |child| {
-                        height += measureNode(Node, child, available_width);
+                        height += measureNode(Node, child, child_width);
                     }
                     break :blk height;
                 },
                 .row => blk: {
+                    const child_count: i32 = @intCast(view_node.children.len);
+                    const total_gap = gap * @max(0, child_count - 1);
+                    const content_width = @max(1, available_width - padding * 2 - margin * 2 - total_gap);
+                    const child_width = @max(1, @divTrunc(content_width, child_count));
                     var height: i32 = 0;
                     for (view_node.children) |child| {
-                        height = @max(height, measureNode(Node, child, available_width));
+                        height = @max(height, measureNode(Node, child, child_width));
                     }
                     break :blk height + padding * 2;
                 },
@@ -708,19 +730,21 @@ fn layoutNode(
     inherited_background: ?COLORREF,
 ) i32 {
     return switch (node) {
-        .text => {
+        .text => |text_node| {
             const control = &state.controls[next_control_index.*];
             next_control_index.* += 1;
             updateInheritedBackground(control, inherited_background);
+            const height = estimatedTextHeight(text_node.value, text_node.style, rect.width);
+            control.height = height;
             _ = MoveWindow(
                 control.hwnd,
                 rect.x,
                 rect.y,
                 @max(1, rect.width),
-                control.height,
+                height,
                 1,
             );
-            return control.height;
+            return height;
         },
         .button => {
             const control = &state.controls[next_control_index.*];
@@ -753,6 +777,7 @@ fn layoutView(
     const view_rect = shrinkRect(rect, margin);
     const background_index = next_view_index.*;
     next_view_index.* += 1;
+    const is_root_view = background_index == 0;
     const view_background = optionalColorToRef(view_node.style.fill()) orelse inherited_background;
 
     const used_height = switch (view_node.style.direction) {
@@ -765,7 +790,7 @@ fn layoutView(
             .x = view_rect.x,
             .y = view_rect.y,
             .width = view_rect.width,
-            .height = @min(view_rect.height, @max(1, used_height)),
+            .height = if (is_root_view) view_rect.height else @min(view_rect.height, @max(1, used_height)),
         },
         .background = view_background,
     };
@@ -871,6 +896,9 @@ fn stateHeaderFromWindow(hwnd: HWND) ?*StateHeader {
 
 fn windowProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.winapi) LRESULT {
     switch (msg) {
+        WM_ERASEBKGND => {
+            return 1;
+        },
         WM_PAINT => {
             var paint: PAINTSTRUCT = undefined;
             const hdc = BeginPaint(hwnd, &paint);
