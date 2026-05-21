@@ -8,9 +8,15 @@ pub const AppOptions = struct {
     root: *const fn () Node,
 };
 
+pub const LayoutDirection = enum {
+    column,
+    row,
+};
+
 pub const ViewStyle = struct {
     gap: u16 = 0,
     padding: u16 = 0,
+    direction: LayoutDirection = .column,
 };
 
 pub const TextNode = struct {
@@ -31,7 +37,10 @@ pub const Node = union(enum) {
         switch (self) {
             .text => |node| std.debug.print("Text(\"{s}\")\n", .{node.value}),
             .view => |node| {
-                std.debug.print("View(gap={}, padding={})\n", .{ node.style.gap, node.style.padding });
+                std.debug.print(
+                    "View(direction={s}, gap={}, padding={})\n",
+                    .{ @tagName(node.style.direction), node.style.gap, node.style.padding },
+                );
                 for (node.children) |child| {
                     child.debugPrint(indent + 2);
                 }
@@ -99,6 +108,18 @@ pub fn view(style: ViewStyle, children: anytype) Node {
     };
 }
 
+pub fn column(style: ViewStyle, children: anytype) Node {
+    var column_style = style;
+    column_style.direction = .column;
+    return view(column_style, children);
+}
+
+pub fn row(style: ViewStyle, children: anytype) Node {
+    var row_style = style;
+    row_style.direction = .row;
+    return view(row_style, children);
+}
+
 pub fn text(value: []const u8) Node {
     return .{
         .text = .{
@@ -135,6 +156,24 @@ test "view stores children in the active build arena" {
     try std.testing.expectEqual(@as(usize, 2), node.view.children.len);
     try std.testing.expectEqualStrings("A", node.view.children[0].text.value);
     try std.testing.expectEqualStrings("B", node.view.children[1].text.value);
+}
+
+test "column and row set layout direction" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    active_allocator = arena.allocator();
+    defer active_allocator = null;
+
+    const column_node = column(.{ .gap = 4 }, .{
+        text("A"),
+    });
+    const row_node = row(.{ .gap = 4 }, .{
+        text("B"),
+    });
+
+    try std.testing.expectEqual(LayoutDirection.column, column_node.view.style.direction);
+    try std.testing.expectEqual(LayoutDirection.row, row_node.view.style.direction);
 }
 
 test "firstText returns first nested text node" {

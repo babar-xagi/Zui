@@ -25,7 +25,7 @@ Capy is used only as reference material. ZUI is not a Capy fork and does not dep
 
 ## Current Status
 
-Milestone 2 is underway. ZUI now has a first Win32 backend that opens a native window and turns multiple `zui.text` nodes into native Win32 `STATIC` controls.
+Milestone 3 is underway. ZUI now has `column` and `row` layout helpers, and the Win32 backend relayouts native text controls when the window is resized.
 
 Development notes are kept in [docs/development](docs/development).
 
@@ -36,4 +36,4 @@ zig build test
 zig build run
 ```
 
-On Windows, `zig build run` opens a native window with the text nodes from `examples/hello.zig`. Close the window to end the app.
+On Windows, `zig build run` opens a native window with the text nodes from `examples/hello.zig`. Resize the window to see the simple relayout, then close it to end the app.

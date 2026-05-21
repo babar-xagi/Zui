@@ -59,6 +59,22 @@ const LayoutRect = struct {
     height: i32,
 };
 
+const StateHeader = struct {
+    relayout: *const fn (*StateHeader, HWND) void,
+};
+
+const TextControl = struct {
+    hwnd: HWND,
+};
+
+fn BackendState(comptime Node: type) type {
+    return struct {
+        header: StateHeader,
+        root: Node,
+        text_controls: []TextControl,
+    };
+}
+
 const Error = error{
     InvalidUtf8,
     ModuleHandleUnavailable,
@@ -79,6 +95,8 @@ const WS_OVERLAPPEDWINDOW = 0x00CF0000;
 const WS_CHILD = 0x40000000;
 const WS_VISIBLE = 0x10000000;
 const WM_DESTROY = 0x0002;
+const WM_SIZE = 0x0005;
+const GWLP_USERDATA = -21;
 const COLOR_WINDOW = 5;
 
 const default_window_width = 800;
@@ -110,12 +128,16 @@ extern "user32" fn DefWindowProcW(hWnd: HWND, msg: UINT, wParam: WPARAM, lParam:
 extern "user32" fn PostQuitMessage(nExitCode: i32) callconv(.winapi) void;
 extern "user32" fn GetClientRect(hWnd: HWND, lpRect: *RECT) callconv(.winapi) BOOL;
 extern "user32" fn GetSysColorBrush(nIndex: i32) callconv(.winapi) HBRUSH;
+extern "user32" fn MoveWindow(hWnd: HWND, x: i32, y: i32, nWidth: i32, nHeight: i32, bRepaint: BOOL) callconv(.winapi) BOOL;
+extern "user32" fn SetWindowLongPtrW(hWnd: HWND, nIndex: i32, dwNewLong: isize) callconv(.winapi) isize;
+extern "user32" fn GetWindowLongPtrW(hWnd: HWND, nIndex: i32) callconv(.winapi) isize;
 
 pub fn run(app: anytype) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
+    const Node = @TypeOf(app.root);
     const title = std.unicode.utf8ToUtf16LeAllocZ(allocator, app.app_name) catch return Error.InvalidUtf8;
     const instance = GetModuleHandleW(null) orelse return Error.ModuleHandleUnavailable;
     try registerWindowClass(instance);
@@ -135,7 +157,11 @@ pub fn run(app: anytype) !void {
         null,
     ) orelse return Error.WindowCreationFailed;
 
-    try renderRoot(@TypeOf(app.root), allocator, instance, hwnd, app.root);
+    const state = try createBackendState(Node, allocator, app.root);
+    _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @as(isize, @intCast(@intFromPtr(&state.header))));
+
+    try createTextControls(Node, allocator, instance, hwnd, app.root, state.text_controls);
+    relayoutWindow(Node, state, hwnd);
 
     _ = ShowWindow(hwnd, SW_SHOWNORMAL);
     _ = UpdateWindow(hwnd);
@@ -175,7 +201,76 @@ fn registerWindowClass(instance: HINSTANCE) !void {
     }
 }
 
-fn renderRoot(comptime Node: type, allocator: std.mem.Allocator, instance: HINSTANCE, hwnd: HWND, root: Node) !void {
+fn createBackendState(comptime Node: type, allocator: std.mem.Allocator, root: Node) !*BackendState(Node) {
+    const state = try allocator.create(BackendState(Node));
+    state.* = .{
+        .header = .{ .relayout = relayoutHeader(Node) },
+        .root = root,
+        .text_controls = try allocator.alloc(TextControl, root.textCount()),
+    };
+    return state;
+}
+
+fn createTextControls(
+    comptime Node: type,
+    allocator: std.mem.Allocator,
+    instance: HINSTANCE,
+    parent: HWND,
+    root: Node,
+    text_controls: []TextControl,
+) !void {
+    var next_index: usize = 0;
+    try createTextControlsForNode(Node, allocator, instance, parent, root, text_controls, &next_index);
+}
+
+fn createTextControlsForNode(
+    comptime Node: type,
+    allocator: std.mem.Allocator,
+    instance: HINSTANCE,
+    parent: HWND,
+    node: Node,
+    text_controls: []TextControl,
+    next_index: *usize,
+) !void {
+    switch (node) {
+        .text => |text_node| {
+            const text = std.unicode.utf8ToUtf16LeAllocZ(allocator, text_node.value) catch return Error.InvalidUtf8;
+            const text_hwnd = CreateWindowExW(
+                0,
+                static_class.ptr,
+                text.ptr,
+                WS_CHILD | WS_VISIBLE,
+                0,
+                0,
+                1,
+                1,
+                parent,
+                null,
+                instance,
+                null,
+            ) orelse return Error.ControlCreationFailed;
+
+            text_controls[next_index.*] = .{ .hwnd = text_hwnd };
+            next_index.* += 1;
+        },
+        .view => |view_node| {
+            for (view_node.children) |child| {
+                try createTextControlsForNode(Node, allocator, instance, parent, child, text_controls, next_index);
+            }
+        },
+    }
+}
+
+fn relayoutHeader(comptime Node: type) *const fn (*StateHeader, HWND) void {
+    return struct {
+        fn relayout(header: *StateHeader, hwnd: HWND) void {
+            const state: *BackendState(Node) = @fieldParentPtr("header", header);
+            relayoutWindow(Node, state, hwnd);
+        }
+    }.relayout;
+}
+
+fn relayoutWindow(comptime Node: type, state: *BackendState(Node), hwnd: HWND) void {
     var client: RECT = undefined;
     const rect = if (GetClientRect(hwnd, &client) != 0)
         LayoutRect{
@@ -192,65 +287,128 @@ fn renderRoot(comptime Node: type, allocator: std.mem.Allocator, instance: HINST
             .height = default_window_height,
         };
 
-    _ = try renderNode(Node, allocator, instance, hwnd, root, rect);
+    var next_index: usize = 0;
+    _ = layoutNode(Node, state.root, state.text_controls, &next_index, rect);
 }
 
-fn renderNode(comptime Node: type, allocator: std.mem.Allocator, instance: HINSTANCE, parent: HWND, node: Node, rect: LayoutRect) !i32 {
+fn measureNode(comptime Node: type, node: Node, available_width: i32) i32 {
     return switch (node) {
-        .text => |text_node| try createTextControl(allocator, instance, parent, text_node.value, rect),
-        .view => |view_node| blk: {
+        .text => default_text_height,
+        .view => |view_node| {
             const padding: i32 = @intCast(view_node.style.padding);
             const gap: i32 = @intCast(view_node.style.gap);
-            const child_x = rect.x + padding;
-            const child_width = @max(1, rect.width - padding * 2);
-            var y = rect.y + padding;
-            var used_height = padding;
+            if (view_node.children.len == 0) return padding * 2;
 
-            for (view_node.children, 0..) |child, index| {
-                if (index > 0) {
-                    y += gap;
-                    used_height += gap;
-                }
-
-                const remaining_height = @max(1, rect.height - used_height - padding);
-                const child_height = try renderNode(Node, allocator, instance, parent, child, .{
-                    .x = child_x,
-                    .y = y,
-                    .width = child_width,
-                    .height = remaining_height,
-                });
-
-                y += child_height;
-                used_height += child_height;
-            }
-
-            break :blk used_height + padding;
+            return switch (view_node.style.direction) {
+                .column => blk: {
+                    var height = padding * 2 + gap * @as(i32, @intCast(view_node.children.len - 1));
+                    for (view_node.children) |child| {
+                        height += measureNode(Node, child, available_width);
+                    }
+                    break :blk height;
+                },
+                .row => blk: {
+                    var height: i32 = 0;
+                    for (view_node.children) |child| {
+                        height = @max(height, measureNode(Node, child, available_width));
+                    }
+                    break :blk height + padding * 2;
+                },
+            };
         },
     };
 }
 
-fn createTextControl(allocator: std.mem.Allocator, instance: HINSTANCE, parent: HWND, value: []const u8, rect: LayoutRect) !i32 {
-    const text = std.unicode.utf8ToUtf16LeAllocZ(allocator, value) catch return Error.InvalidUtf8;
-    _ = CreateWindowExW(
-        0,
-        static_class.ptr,
-        text.ptr,
-        WS_CHILD | WS_VISIBLE,
-        rect.x,
-        rect.y,
-        @max(1, rect.width),
-        default_text_height,
-        parent,
-        null,
-        instance,
-        null,
-    ) orelse return Error.ControlCreationFailed;
+fn layoutNode(comptime Node: type, node: Node, text_controls: []TextControl, next_index: *usize, rect: LayoutRect) i32 {
+    return switch (node) {
+        .text => {
+            const control = text_controls[next_index.*];
+            next_index.* += 1;
+            _ = MoveWindow(
+                control.hwnd,
+                rect.x,
+                rect.y,
+                @max(1, rect.width),
+                default_text_height,
+                1,
+            );
+            return default_text_height;
+        },
+        .view => |view_node| switch (view_node.style.direction) {
+            .column => layoutColumn(Node, view_node, text_controls, next_index, rect),
+            .row => layoutRow(Node, view_node, text_controls, next_index, rect),
+        },
+    };
+}
 
-    return default_text_height;
+fn layoutColumn(comptime Node: type, view_node: anytype, text_controls: []TextControl, next_index: *usize, rect: LayoutRect) i32 {
+    const padding: i32 = @intCast(view_node.style.padding);
+    const gap: i32 = @intCast(view_node.style.gap);
+    const child_x = rect.x + padding;
+    const child_width = @max(1, rect.width - padding * 2);
+    var y = rect.y + padding;
+    var used_height = padding;
+
+    for (view_node.children, 0..) |child, index| {
+        if (index > 0) {
+            y += gap;
+            used_height += gap;
+        }
+
+        const child_height = layoutNode(Node, child, text_controls, next_index, .{
+            .x = child_x,
+            .y = y,
+            .width = child_width,
+            .height = @max(1, rect.height - used_height - padding),
+        });
+
+        y += child_height;
+        used_height += child_height;
+    }
+
+    return used_height + padding;
+}
+
+fn layoutRow(comptime Node: type, view_node: anytype, text_controls: []TextControl, next_index: *usize, rect: LayoutRect) i32 {
+    const padding: i32 = @intCast(view_node.style.padding);
+    const gap: i32 = @intCast(view_node.style.gap);
+    if (view_node.children.len == 0) return padding * 2;
+
+    const child_count: i32 = @intCast(view_node.children.len);
+    const total_gap = gap * @max(0, child_count - 1);
+    const content_width = @max(1, rect.width - padding * 2 - total_gap);
+    const child_width = @max(1, @divTrunc(content_width, child_count));
+    const child_height = @max(1, rect.height - padding * 2);
+    var x = rect.x + padding;
+    var measured_height: i32 = 0;
+
+    for (view_node.children, 0..) |child, index| {
+        if (index > 0) x += gap;
+
+        const used_height = layoutNode(Node, child, text_controls, next_index, .{
+            .x = x,
+            .y = rect.y + padding,
+            .width = child_width,
+            .height = child_height,
+        });
+
+        measured_height = @max(measured_height, used_height);
+        x += child_width;
+    }
+
+    return measured_height + padding * 2;
 }
 
 fn windowProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.winapi) LRESULT {
     switch (msg) {
+        WM_SIZE => {
+            const raw_state = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+            if (raw_state != 0) {
+                const header: *StateHeader = @ptrFromInt(@as(usize, @intCast(raw_state)));
+                header.relayout(header, hwnd);
+            }
+            return 0;
+        },
         WM_DESTROY => {
             PostQuitMessage(0);
             return 0;

@@ -114,7 +114,7 @@ zig build
 
 ## Next
 
-Milestone 3 should focus on basic layout:
+Milestone 3 focuses on basic layout:
 
 - create a clearer layout model
 - support row/column directions

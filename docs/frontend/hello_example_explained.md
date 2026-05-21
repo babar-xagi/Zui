@@ -10,12 +10,17 @@ The goal is to understand how this code describes a UI tree, how nested views wo
 const zui = @import("zui");
 
 fn HomeScreen() zui.Node {
-    return zui.view(.{ .padding = 24, .gap = 10 }, .{
+    return zui.column(.{ .padding = 24, .gap = 12 }, .{
         zui.text("Hello World Well Come to the ZUI!"),
-        zui.text("This is rendered from multiple ZUI text nodes."),
-        zui.view(.{ .padding = 24, .gap = 10 }, .{
-            zui.text("Nested views can contribute text too."),
-            zui.text("Next step: richer layout and controls."),
+        zui.text("Column layout stacks these text nodes vertically."),
+        zui.row(.{ .padding = 12, .gap = 12 }, .{
+            zui.text("Row item A"),
+            zui.text("Row item B"),
+            zui.text("Row item C"),
+        }),
+        zui.column(.{ .padding = 12, .gap = 6 }, .{
+            zui.text("Nested columns still work."),
+            zui.text("Resize the window to trigger relayout."),
         }),
     });
 }
@@ -34,16 +39,19 @@ The frontend code does not directly call Win32, GTK, Android, or any platform AP
 
 Instead, it builds a simple tree of `zui.Node` values:
 
-- `zui.view(...)` creates a container node.
+- `zui.column(...)` creates a vertical container node.
+- `zui.row(...)` creates a horizontal container node.
+- `zui.view(...)` creates a generic container node.
 - `zui.text(...)` creates a text node.
 - `zui.run(...)` starts the app and gives the root node to the backend.
 
 Current backend behavior on Windows:
 
 - Each `zui.text(...)` becomes a native Win32 `STATIC` control.
-- Each `zui.view(...)` is used for layout.
+- Each container is used for layout.
 - `padding` creates space inside a view.
 - `gap` creates space between child nodes.
+- The Win32 backend relayouts controls when the window resizes.
 
 ## UI Tree Diagram
 
@@ -52,27 +60,38 @@ The code creates this tree:
 ```text
 App: "Hello ZUI"
 +-- HomeScreen()
-    +-- View padding=24 gap=10
+    +-- Column padding=24 gap=12
         +-- Text "Hello World Well Come to the ZUI!"
-        +-- Text "This is rendered from multiple ZUI text nodes."
-        +-- View padding=24 gap=10
-            +-- Text "Nested views can contribute text too."
-            +-- Text "Next step: richer layout and controls."
+        +-- Text "Column layout stacks these text nodes vertically."
+        +-- Row padding=12 gap=12
+            +-- Text "Row item A"
+            +-- Text "Row item B"
+            +-- Text "Row item C"
+        +-- Column padding=12 gap=6
+            +-- Text "Nested columns still work."
+            +-- Text "Resize the window to trigger relayout."
 ```
 
 In memory, that is roughly:
 
 ```text
 Node.view
-  style = { padding = 24, gap = 10 }
+  style = { direction = column, padding = 24, gap = 12 }
   children = [
     Node.text("Hello World Well Come to the ZUI!"),
-    Node.text("This is rendered from multiple ZUI text nodes."),
+    Node.text("Column layout stacks these text nodes vertically."),
     Node.view
-      style = { padding = 24, gap = 10 }
+      style = { direction = row, padding = 12, gap = 12 }
       children = [
-        Node.text("Nested views can contribute text too."),
-        Node.text("Next step: richer layout and controls."),
+        Node.text("Row item A"),
+        Node.text("Row item B"),
+        Node.text("Row item C"),
+      ]
+    Node.view
+      style = { direction = column, padding = 12, gap = 6 }
+      children = [
+        Node.text("Nested columns still work."),
+        Node.text("Resize the window to trigger relayout."),
       ]
   ]
 ```
@@ -86,22 +105,25 @@ Window
 +---------------------------------------------------------+
 | padding 24                                              |
 |                                                         |
-|  Text: Hello World Well Come to the ZUI!                |
+| Text: Hello World Well Come to the ZUI!                 |
 |                                                         |
-|  gap 10                                                 |
+| gap 12                                                  |
 |                                                         |
-|  Text: This is rendered from multiple ZUI text nodes.   |
+| Text: Column layout stacks these text nodes vertically. |
 |                                                         |
-|  gap 10                                                 |
+| gap 12                                                  |
 |                                                         |
-|  Nested View padding 24                                 |
-|  +---------------------------------------------------+  |
-|  | Text: Nested views can contribute text too.       |  |
-|  |                                                   |  |
-|  | gap 10                                            |  |
-|  |                                                   |  |
-|  | Text: Next step: richer layout and controls.      |  |
-|  +---------------------------------------------------+  |
+| Row padding 12                                          |
+| +-----------+ gap 12 +-----------+ gap 12 +-----------+ |
+| | Row item A|        | Row item B|        | Row item C| |
+| +-----------+        +-----------+        +-----------+ |
+|                                                         |
+| gap 12                                                  |
+|                                                         |
+| Nested Column padding 12                                |
+| Text: Nested columns still work.                        |
+| gap 6                                                   |
+| Text: Resize the window to trigger relayout.            |
 +---------------------------------------------------------+
 ```
 
@@ -125,7 +147,8 @@ main()
           +-- on Windows:
               +-- creates native window
               +-- walks the Node tree
-              +-- turns each Text node into Win32 STATIC control
+              +-- turns each Text node into a Win32 STATIC control
+              +-- lays out column and row containers
               +-- enters native message loop
 ```
 
@@ -143,6 +166,8 @@ It gives access to:
 
 - `zui.Node`
 - `zui.view`
+- `zui.column`
+- `zui.row`
 - `zui.text`
 - `zui.run`
 
@@ -159,27 +184,27 @@ For now, a screen is just a Zig function. It does not need a class, object, JSX 
 ### Create The Root View
 
 ```zig
-return zui.view(.{ .padding = 24, .gap = 10 }, .{
+return zui.column(.{ .padding = 24, .gap = 12 }, .{
 ```
 
-This creates a container node.
+This creates a vertical container node.
 
 It receives two arguments:
 
 ```zig
-zui.view(style, children)
+zui.column(style, children)
 ```
 
 The style:
 
 ```zig
-.{ .padding = 24, .gap = 10 }
+.{ .padding = 24, .gap = 12 }
 ```
 
 means:
 
 - `padding = 24`: place children 24 pixels inside the container edges.
-- `gap = 10`: place 10 pixels between each child.
+- `gap = 12`: place 12 pixels between each child.
 
 The children:
 
@@ -195,7 +220,7 @@ are a Zig tuple containing child nodes.
 
 ```zig
 zui.text("Hello World Well Come to the ZUI!"),
-zui.text("This is rendered from multiple ZUI text nodes."),
+zui.text("Column layout stacks these text nodes vertically."),
 ```
 
 Each `zui.text(...)` creates a `Node.text`.
@@ -205,15 +230,27 @@ On Windows today, every text node becomes a Win32 `STATIC` control.
 ### Add A Nested View
 
 ```zig
-zui.view(.{ .padding = 24, .gap = 10 }, .{
-    zui.text("Nested views can contribute text too."),
-    zui.text("Next step: richer layout and controls."),
+zui.row(.{ .padding = 12, .gap = 12 }, .{
+    zui.text("Row item A"),
+    zui.text("Row item B"),
+    zui.text("Row item C"),
 }),
 ```
 
-This creates a view inside another view.
+This creates a horizontal row inside the outer column.
 
-Nested views let us group children and apply layout rules to that group.
+Rows place their children left to right. The current Win32 backend gives row children equal widths.
+
+### Add A Nested Column
+
+```zig
+zui.column(.{ .padding = 12, .gap = 6 }, .{
+    zui.text("Nested columns still work."),
+    zui.text("Resize the window to trigger relayout."),
+}),
+```
+
+Nested columns let us group children and apply vertical layout rules to that group.
 
 Right now, nested views only affect positioning. Later they can become real backend container peers, support row/column direction, background color, borders, flex behavior, and more.
 
@@ -239,19 +276,21 @@ ZUI calls `HomeScreen()` internally. The user does not manually create a window 
 
 ## How `zui.view` Works Today
 
-Current implementation idea:
+Current implementation idea for all containers:
 
 ```text
-zui.view(style, tuple_children)
+zui.view/style wrapper(style, tuple_children)
   +-- allocates a slice of Node values
   +-- copies tuple children into that slice
   +-- returns Node.view { style, children }
 ```
 
+`column` and `row` set `style.direction` before calling `view`.
+
 So this:
 
 ```zig
-zui.view(.{}, .{
+zui.row(.{}, .{
     zui.text("A"),
     zui.text("B"),
 })
@@ -261,6 +300,7 @@ becomes:
 
 ```text
 Node.view
+  style.direction = row
   children[0] = Node.text("A")
   children[1] = Node.text("B")
 ```
@@ -274,11 +314,16 @@ renderNode(node)
   if node is Text:
       CreateWindowExW("STATIC", text)
 
-  if node is View:
+  if node is Column:
       apply padding
       for each child:
           renderNode(child)
           move y position by child height + gap
+
+  if node is Row:
+      apply padding
+      split width across children
+      render each child from left to right
 ```
 
 This is why multiple `zui.text(...)` calls become multiple visible native controls.
@@ -289,10 +334,10 @@ This is still early.
 
 Current limitations:
 
-- Layout is only vertical.
+- Layout supports simple column and row directions.
 - `view` is logical only, not a native visible container.
 - Text height is fixed.
-- Resize does not relayout yet.
+- Resize relayouts existing text controls on Win32.
 - There are no buttons or inputs yet.
 - There is no state or reconciliation yet.
 - Styling is only `padding` and `gap`.
@@ -301,9 +346,6 @@ Current limitations:
 
 Next frontend improvements should be:
 
-- `zui.column(...)`
-- `zui.row(...)`
 - text alignment
-- window resize relayout
 - `zui.button(...)`
 - state for changing UI after events

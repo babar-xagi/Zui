@@ -1,12 +1,17 @@
 const zui = @import("zui");
 
 fn HomeScreen() zui.Node {
-    return zui.view(.{ .padding = 24, .gap = 10 }, .{
+    return zui.column(.{ .padding = 24, .gap = 12 }, .{
         zui.text("Hello World Well Come to the ZUI!"),
-        zui.text("This is rendered from multiple ZUI text nodes."),
-        zui.view(.{ .padding = 24, .gap = 10 }, .{
-            zui.text("Nested views can contribute text too."),
-            zui.text("Next step: richer layout and controls."),
+        zui.text("Column layout stacks these text nodes vertically."),
+        zui.row(.{ .padding = 12, .gap = 12 }, .{
+            zui.text("Row item A"),
+            zui.text("Row item B"),
+            zui.text("Row item C"),
+        }),
+        zui.column(.{ .padding = 12, .gap = 6 }, .{
+            zui.text("Nested columns still work."),
+            zui.text("Resize the window to trigger relayout."),
         }),
     });
 }
