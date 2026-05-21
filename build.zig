@@ -149,6 +149,78 @@ pub fn build(b: *std.Build) void {
     const run_first_demo_step = b.step("run-first-demo", "Run the first polished ZUI demo app");
     run_first_demo_step.dependOn(&run_first_demo.step);
 
+    // Todo App - Example 010
+    const todo_app = b.addExecutable(.{
+        .name = "zui-010-todo-app",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/010_todo_app.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zui", .module = zui_mod },
+            },
+        }),
+    });
+    addPlatformLinks(todo_app.root_module, target);
+    b.installArtifact(todo_app);
+
+    const run_todo_app = b.addRunArtifact(todo_app);
+    run_todo_app.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_todo_app.addArgs(args);
+    }
+
+    const run_todo_step = b.step("run-todo", "Run the todo app example");
+    run_todo_step.dependOn(&run_todo_app.step);
+
+    // Profile App - Example 011
+    const profile_app = b.addExecutable(.{
+        .name = "zui-011-profile-app",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/011_profile_app.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zui", .module = zui_mod },
+            },
+        }),
+    });
+    addPlatformLinks(profile_app.root_module, target);
+    b.installArtifact(profile_app);
+
+    const run_profile_app = b.addRunArtifact(profile_app);
+    run_profile_app.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_profile_app.addArgs(args);
+    }
+
+    const run_profile_step = b.step("run-profile", "Run the profile app example");
+    run_profile_step.dependOn(&run_profile_app.step);
+
+    // Advanced Counter - Example 012
+    const advanced_counter = b.addExecutable(.{
+        .name = "zui-012-advanced-counter",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/012_advanced_counter.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zui", .module = zui_mod },
+            },
+        }),
+    });
+    addPlatformLinks(advanced_counter.root_module, target);
+    b.installArtifact(advanced_counter);
+
+    const run_advanced_counter = b.addRunArtifact(advanced_counter);
+    run_advanced_counter.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_advanced_counter.addArgs(args);
+    }
+
+    const run_advanced_counter_step = b.step("run-advanced-counter", "Run the advanced counter example");
+    run_advanced_counter_step.dependOn(&run_advanced_counter.step);
+
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/zui.zig"),
         .target = target,

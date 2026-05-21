@@ -1,5 +1,7 @@
 .zig-cache/
 zig-out/
+.idea/
+.vscode/
 *.exe
 *.pdb
 *.lib
