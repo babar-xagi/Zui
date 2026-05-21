@@ -57,6 +57,29 @@ pub fn build(b: *std.Build) void {
     const run_button_step = b.step("run-button", "Run the phase 004 interactive button example");
     run_button_step.dependOn(&run_interactive_button.step);
 
+    const state_counter = b.addExecutable(.{
+        .name = "zui-005-state-counter",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/005_state_counter.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zui", .module = zui_mod },
+            },
+        }),
+    });
+    addPlatformLinks(state_counter.root_module, target);
+    b.installArtifact(state_counter);
+
+    const run_state_counter = b.addRunArtifact(state_counter);
+    run_state_counter.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_state_counter.addArgs(args);
+    }
+
+    const run_counter_step = b.step("run-counter", "Run the phase 005 state counter example");
+    run_counter_step.dependOn(&run_state_counter.step);
+
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/zui.zig"),
         .target = target,

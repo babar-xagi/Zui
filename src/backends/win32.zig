@@ -61,6 +61,7 @@ const LayoutRect = struct {
 
 const StateHeader = struct {
     relayout: *const fn (*StateHeader, HWND) void,
+    refresh: *const fn (*StateHeader, HWND) void,
     command: *const fn (*StateHeader, u16) void,
 };
 
@@ -79,10 +80,14 @@ const NativeControl = struct {
 fn BackendState(comptime Node: type) type {
     return struct {
         header: StateHeader,
+        allocator: std.mem.Allocator,
         root: Node,
         controls: []NativeControl,
     };
 }
+
+var active_header: ?*StateHeader = null;
+var active_hwnd: HWND = null;
 
 const Error = error{
     InvalidUtf8,
@@ -143,6 +148,7 @@ extern "user32" fn PostQuitMessage(nExitCode: i32) callconv(.winapi) void;
 extern "user32" fn GetClientRect(hWnd: HWND, lpRect: *RECT) callconv(.winapi) BOOL;
 extern "user32" fn GetSysColorBrush(nIndex: i32) callconv(.winapi) HBRUSH;
 extern "user32" fn MoveWindow(hWnd: HWND, x: i32, y: i32, nWidth: i32, nHeight: i32, bRepaint: BOOL) callconv(.winapi) BOOL;
+extern "user32" fn SetWindowTextW(hWnd: HWND, lpString: LPCWSTR) callconv(.winapi) BOOL;
 extern "user32" fn SetWindowLongPtrW(hWnd: HWND, nIndex: i32, dwNewLong: isize) callconv(.winapi) isize;
 extern "user32" fn GetWindowLongPtrW(hWnd: HWND, nIndex: i32) callconv(.winapi) isize;
 
@@ -173,6 +179,14 @@ pub fn run(app: anytype) !void {
 
     const state = try createBackendState(Node, allocator, app.root);
     _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @as(isize, @intCast(@intFromPtr(&state.header))));
+    active_header = &state.header;
+    active_hwnd = hwnd;
+    app.set_invalidator(refreshActiveWindow);
+    defer {
+        app.set_invalidator(null);
+        active_header = null;
+        active_hwnd = null;
+    }
 
     try createNativeControls(Node, allocator, instance, hwnd, app.root, state.controls);
     relayoutWindow(Node, state, hwnd);
@@ -220,8 +234,10 @@ fn createBackendState(comptime Node: type, allocator: std.mem.Allocator, root: N
     state.* = .{
         .header = .{
             .relayout = relayoutHeader(Node),
+            .refresh = refreshHeader(Node),
             .command = commandHeader(Node),
         },
+        .allocator = allocator,
         .root = root,
         .controls = try allocator.alloc(NativeControl, root.controlCount()),
     };
@@ -316,6 +332,15 @@ fn relayoutHeader(comptime Node: type) *const fn (*StateHeader, HWND) void {
     }.relayout;
 }
 
+fn refreshHeader(comptime Node: type) *const fn (*StateHeader, HWND) void {
+    return struct {
+        fn refresh(header: *StateHeader, hwnd: HWND) void {
+            const state: *BackendState(Node) = @fieldParentPtr("header", header);
+            refreshWindow(Node, state, hwnd) catch {};
+        }
+    }.refresh;
+}
+
 fn commandHeader(comptime Node: type) *const fn (*StateHeader, u16) void {
     return struct {
         fn command(header: *StateHeader, control_id: u16) void {
@@ -330,6 +355,14 @@ fn commandHeader(comptime Node: type) *const fn (*StateHeader, u16) void {
             }
         }
     }.command;
+}
+
+fn refreshActiveWindow() void {
+    if (active_header) |header| {
+        if (active_hwnd != null) {
+            header.refresh(header, active_hwnd);
+        }
+    }
 }
 
 fn relayoutWindow(comptime Node: type, state: *BackendState(Node), hwnd: HWND) void {
@@ -351,6 +384,41 @@ fn relayoutWindow(comptime Node: type, state: *BackendState(Node), hwnd: HWND) v
 
     var next_index: usize = 0;
     _ = layoutNode(Node, state.root, state.controls, &next_index, rect);
+}
+
+fn refreshWindow(comptime Node: type, state: *BackendState(Node), hwnd: HWND) !void {
+    var next_index: usize = 0;
+    try refreshNode(Node, state.allocator, state.root, state.controls, &next_index);
+    relayoutWindow(Node, state, hwnd);
+}
+
+fn refreshNode(
+    comptime Node: type,
+    allocator: std.mem.Allocator,
+    node: Node,
+    controls: []NativeControl,
+    next_index: *usize,
+) !void {
+    switch (node) {
+        .text => |text_node| {
+            const control = controls[next_index.*];
+            next_index.* += 1;
+
+            if (text_node.dynamic) |dynamic| {
+                const value = dynamic.render(dynamic.context, allocator);
+                const text = std.unicode.utf8ToUtf16LeAllocZ(allocator, value) catch return Error.InvalidUtf8;
+                _ = SetWindowTextW(control.hwnd, text.ptr);
+            }
+        },
+        .button => {
+            next_index.* += 1;
+        },
+        .view => |view_node| {
+            for (view_node.children) |child| {
+                try refreshNode(Node, allocator, child, controls, next_index);
+            }
+        },
+    }
 }
 
 fn measureNode(comptime Node: type, node: Node, available_width: i32) i32 {

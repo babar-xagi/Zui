@@ -2,6 +2,9 @@ const std = @import("std");
 const backend = @import("backend.zig");
 
 var active_allocator: ?std.mem.Allocator = null;
+var active_invalidator: ?InvalidateHandler = null;
+
+pub const InvalidateHandler = *const fn () void;
 
 pub const AppOptions = struct {
     app_name: []const u8 = "ZUI App",
@@ -19,8 +22,16 @@ pub const ViewStyle = struct {
     direction: LayoutDirection = .column,
 };
 
+pub const TextRenderer = *const fn (context: *anyopaque, allocator: std.mem.Allocator) []const u8;
+
+pub const DynamicText = struct {
+    context: *anyopaque,
+    render: TextRenderer,
+};
+
 pub const TextNode = struct {
     value: []const u8,
+    dynamic: ?DynamicText = null,
 };
 
 pub const ClickHandler = *const fn () void;
@@ -105,6 +116,25 @@ pub const Node = union(enum) {
     }
 };
 
+pub fn State(comptime T: type) type {
+    return struct {
+        value: T,
+
+        pub fn init(initial: T) @This() {
+            return .{ .value = initial };
+        }
+
+        pub fn get(self: *const @This()) T {
+            return self.value;
+        }
+
+        pub fn set(self: *@This(), value: T) void {
+            self.value = value;
+            invalidate();
+        }
+    };
+}
+
 pub fn run(options: AppOptions) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -117,7 +147,18 @@ pub fn run(options: AppOptions) !void {
         .app_name = options.app_name,
         .root_text = root_node.firstText() orelse options.app_name,
         .root = root_node,
+        .set_invalidator = setInvalidator,
     });
+}
+
+pub fn invalidate() void {
+    if (active_invalidator) |handler| {
+        handler();
+    }
+}
+
+fn setInvalidator(handler: ?InvalidateHandler) void {
+    active_invalidator = handler;
 }
 
 pub fn view(style: ViewStyle, children: anytype) Node {
@@ -166,6 +207,40 @@ pub fn button(options: ButtonOptions) Node {
     };
 }
 
+pub fn stateText(
+    comptime T: type,
+    state_value: *const State(T),
+    formatter: *const fn (T, std.mem.Allocator) []const u8,
+) Node {
+    const allocator = active_allocator orelse @panic("zui.stateText must be called inside zui.run for now");
+
+    const Binding = struct {
+        state: *const State(T),
+        format: *const fn (T, std.mem.Allocator) []const u8,
+
+        fn render(context: *anyopaque, render_allocator: std.mem.Allocator) []const u8 {
+            const binding: *@This() = @ptrCast(@alignCast(context));
+            return binding.format(binding.state.get(), render_allocator);
+        }
+    };
+
+    const binding = allocator.create(Binding) catch @panic("out of memory");
+    binding.* = .{
+        .state = state_value,
+        .format = formatter,
+    };
+
+    return .{
+        .text = .{
+            .value = Binding.render(binding, allocator),
+            .dynamic = .{
+                .context = binding,
+                .render = Binding.render,
+            },
+        },
+    };
+}
+
 fn printIndent(indent: usize) void {
     for (0..indent) |_| {
         std.debug.print(" ", .{});
@@ -181,6 +256,14 @@ test "button creates a button node" {
     const node = button(.{ .label = "Press" });
     try std.testing.expectEqualStrings("Press", node.button.label);
     try std.testing.expectEqual(@as(?ClickHandler, null), node.button.on_click);
+}
+
+test "state stores and updates a value" {
+    var counter = State(i32).init(3);
+    try std.testing.expectEqual(@as(i32, 3), counter.get());
+
+    counter.set(4);
+    try std.testing.expectEqual(@as(i32, 4), counter.get());
 }
 
 test "view stores children in the active build arena" {
@@ -240,6 +323,29 @@ test "firstText returns first nested text node" {
 test "firstText can use a button label" {
     const node = button(.{ .label = "Launch" });
     try std.testing.expectEqualStrings("Launch", node.firstText().?);
+}
+
+test "stateText renders current state through a formatter" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    active_allocator = arena.allocator();
+    defer active_allocator = null;
+
+    const Formatter = struct {
+        fn render(value: i32, allocator: std.mem.Allocator) []const u8 {
+            return std.fmt.allocPrint(allocator, "Count: {}", .{value}) catch @panic("out of memory");
+        }
+    };
+
+    var counter = State(i32).init(7);
+    const node = stateText(i32, &counter, Formatter.render);
+    try std.testing.expectEqualStrings("Count: 7", node.text.value);
+
+    counter.set(8);
+    const dynamic = node.text.dynamic.?;
+    const next_value = dynamic.render(dynamic.context, arena.allocator());
+    try std.testing.expectEqualStrings("Count: 8", next_value);
 }
 
 test "textCount counts nested text nodes" {
