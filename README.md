@@ -25,7 +25,7 @@ Capy is used only as reference material. ZUI is not a Capy fork and does not dep
 
 ## Current Status
 
-ZUI now has a native Win32 backend, text, layout, buttons, a tiny state model, and a cleaner declarative API:
+ZUI now has a native Win32 backend, text, layout, buttons, a tiny state model, essential styling, and a cleaner declarative API:
 
 - `ui.Element`
 - `ui.view(.{ ... })`
@@ -34,6 +34,9 @@ ZUI now has a native Win32 backend, text, layout, buttons, a tiny state model, a
 - `ui.button(.{ .title = "..." })`
 - `ui.state(T, initial)`
 - `ui.stateText(...)`
+- `ui.styledText(...)`
+- `ui.t("Text", .{ .fg = ..., .size = ... })`
+- `ui.colors`
 
 Development notes are kept in [docs/development](docs/development).
 
@@ -45,6 +48,8 @@ zig build run
 zig build run-button
 zig build run-counter
 zig build run-declarative
+zig build run-styling
+zig build run-first-demo
 ```
 
 On Windows, these commands open native windows. Close the window to end the app.

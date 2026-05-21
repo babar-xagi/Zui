@@ -103,6 +103,52 @@ pub fn build(b: *std.Build) void {
     const run_declarative_step = b.step("run-declarative", "Run the phase 006 declarative API example");
     run_declarative_step.dependOn(&run_declarative_api.step);
 
+    const essential_styling = b.addExecutable(.{
+        .name = "zui-007-essential-styling",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/007_essential_styling.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zui", .module = zui_mod },
+            },
+        }),
+    });
+    addPlatformLinks(essential_styling.root_module, target);
+    b.installArtifact(essential_styling);
+
+    const run_essential_styling = b.addRunArtifact(essential_styling);
+    run_essential_styling.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_essential_styling.addArgs(args);
+    }
+
+    const run_styling_step = b.step("run-styling", "Run the phase 007 essential styling example");
+    run_styling_step.dependOn(&run_essential_styling.step);
+
+    const first_demo = b.addExecutable(.{
+        .name = "zui-first-demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/first_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zui", .module = zui_mod },
+            },
+        }),
+    });
+    addPlatformLinks(first_demo.root_module, target);
+    b.installArtifact(first_demo);
+
+    const run_first_demo = b.addRunArtifact(first_demo);
+    run_first_demo.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_first_demo.addArgs(args);
+    }
+
+    const run_first_demo_step = b.step("run-first-demo", "Run the first polished ZUI demo app");
+    run_first_demo_step.dependOn(&run_first_demo.step);
+
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/zui.zig"),
         .target = target,
@@ -122,6 +168,7 @@ fn addPlatformLinks(module: *std.Build.Module, target: std.Build.ResolvedTarget)
         .windows => {
             module.linkSystemLibrary("user32", .{});
             module.linkSystemLibrary("kernel32", .{});
+            module.linkSystemLibrary("gdi32", .{});
         },
         else => {},
     }

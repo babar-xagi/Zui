@@ -16,10 +16,118 @@ pub const LayoutDirection = enum {
     row,
 };
 
+pub const Color = struct {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8 = 255,
+
+    pub fn rgb(r: u8, g: u8, b: u8) Color {
+        return .{ .r = r, .g = g, .b = b };
+    }
+
+    pub fn rgba(r: u8, g: u8, b: u8, a: u8) Color {
+        return .{ .r = r, .g = g, .b = b, .a = a };
+    }
+};
+
+pub const colors = struct {
+    pub const white = Color.rgb(255, 255, 255);
+    pub const black = Color.rgb(0, 0, 0);
+    pub const slate_50 = Color.rgb(248, 250, 252);
+    pub const slate_100 = Color.rgb(241, 245, 249);
+    pub const slate_700 = Color.rgb(51, 65, 85);
+    pub const slate_900 = Color.rgb(15, 23, 42);
+    pub const blue_600 = Color.rgb(37, 99, 235);
+    pub const emerald_600 = Color.rgb(5, 150, 105);
+    pub const amber_500 = Color.rgb(245, 158, 11);
+    pub const rose_600 = Color.rgb(225, 29, 72);
+};
+
+pub const FontWeight = enum {
+    regular,
+    medium,
+    semibold,
+    bold,
+};
+
+pub const TextStyle = struct {
+    fg: ?Color = null,
+    bg: ?Color = null,
+    size: ?u16 = null,
+    weight: ?FontWeight = null,
+    color: ?Color = null,
+    background: ?Color = null,
+    font_size: u16 = 14,
+    font_weight: FontWeight = .regular,
+    font_family: ?[]const u8 = null,
+
+    pub fn foreground(self: TextStyle) ?Color {
+        return self.fg orelse self.color;
+    }
+
+    pub fn fill(self: TextStyle) ?Color {
+        return self.bg orelse self.background;
+    }
+
+    pub fn fontSize(self: TextStyle) u16 {
+        return self.size orelse self.font_size;
+    }
+
+    pub fn fontWeight(self: TextStyle) FontWeight {
+        return self.weight orelse self.font_weight;
+    }
+};
+
+pub const ButtonStyle = struct {
+    fg: ?Color = null,
+    bg: ?Color = null,
+    size: ?u16 = null,
+    weight: ?FontWeight = null,
+    color: ?Color = null,
+    background: ?Color = null,
+    font_size: u16 = 14,
+    font_weight: FontWeight = .regular,
+    font_family: ?[]const u8 = null,
+
+    pub fn foreground(self: ButtonStyle) ?Color {
+        return self.fg orelse self.color;
+    }
+
+    pub fn fill(self: ButtonStyle) ?Color {
+        return self.bg orelse self.background;
+    }
+
+    pub fn fontSize(self: ButtonStyle) u16 {
+        return self.size orelse self.font_size;
+    }
+
+    pub fn fontWeight(self: ButtonStyle) FontWeight {
+        return self.weight orelse self.font_weight;
+    }
+};
+
 pub const ViewStyle = struct {
     gap: u16 = 0,
+    p: ?u16 = null,
+    m: ?u16 = null,
+    bg: ?Color = null,
     padding: u16 = 0,
+    margin: u16 = 0,
     direction: LayoutDirection = .column,
+    background: ?Color = null,
+
+    pub fn paddingValue(self: ViewStyle) u16 {
+        return self.p orelse self.padding;
+    }
+
+    pub fn marginValue(self: ViewStyle) u16 {
+        return self.m orelse self.margin;
+    }
+
+    pub fn fill(self: ViewStyle) ?Color {
+        return self.bg orelse self.background;
+    }
 };
 
 pub const TextRenderer = *const fn (context: *anyopaque, allocator: std.mem.Allocator) []const u8;
@@ -32,6 +140,7 @@ pub const DynamicText = struct {
 pub const TextNode = struct {
     value: []const u8,
     dynamic: ?DynamicText = null,
+    style: TextStyle = .{},
 };
 
 pub const ClickHandler = *const fn () void;
@@ -40,11 +149,21 @@ pub const ButtonOptions = struct {
     title: ?[]const u8 = null,
     label: ?[]const u8 = null,
     on_click: ?ClickHandler = null,
+    style: ButtonStyle = .{},
+    fg: ?Color = null,
+    bg: ?Color = null,
+    size: ?u16 = null,
+    weight: ?FontWeight = null,
+    color: ?Color = null,
+    background: ?Color = null,
+    font_size: ?u16 = null,
+    font_weight: ?FontWeight = null,
 };
 
 pub const ButtonNode = struct {
     label: []const u8,
     on_click: ?ClickHandler,
+    style: ButtonStyle = .{},
 };
 
 pub const ViewNode = struct {
@@ -64,8 +183,8 @@ pub const Node = union(enum) {
             .button => |node| std.debug.print("Button(\"{s}\")\n", .{node.label}),
             .view => |node| {
                 std.debug.print(
-                    "View(direction={s}, gap={}, padding={})\n",
-                    .{ @tagName(node.style.direction), node.style.gap, node.style.padding },
+                    "View(direction={s}, gap={}, padding={}, margin={})\n",
+                    .{ @tagName(node.style.direction), node.style.gap, node.style.paddingValue(), node.style.marginValue() },
                 );
                 for (node.children) |child| {
                     child.debugPrint(indent + 2);
@@ -110,6 +229,19 @@ pub const Node = union(enum) {
                 var count: usize = 0;
                 for (node.children) |child| {
                     count += child.controlCount();
+                }
+                return count;
+            },
+        };
+    }
+
+    pub fn viewCount(self: Node) usize {
+        return switch (self) {
+            .text, .button => 0,
+            .view => |node| {
+                var count: usize = 1;
+                for (node.children) |child| {
+                    count += child.viewCount();
                 }
                 return count;
             },
@@ -214,12 +346,48 @@ pub fn textFmt(comptime format: []const u8, args: anytype) Element {
     return text(std.fmt.allocPrint(allocator, format, args) catch @panic("out of memory"));
 }
 
+pub const TextOptions = struct {
+    value: []const u8,
+    style: TextStyle = .{},
+};
+
+pub fn styledText(options: TextOptions) Element {
+    return .{
+        .text = .{
+            .value = options.value,
+            .style = options.style,
+        },
+    };
+}
+
+pub fn styledTextFmt(comptime format: []const u8, args: anytype, style: TextStyle) Element {
+    const allocator = active_allocator orelse @panic("zui.styledTextFmt must be called inside zui.run for now");
+    return styledText(.{
+        .value = std.fmt.allocPrint(allocator, format, args) catch @panic("out of memory"),
+        .style = style,
+    });
+}
+
+pub fn t(value: []const u8, style: TextStyle) Element {
+    return styledText(.{
+        .value = value,
+        .style = style,
+    });
+}
+
 pub fn button(options: ButtonOptions) Element {
     const title = options.title orelse options.label orelse @panic("zui.button requires .title");
+    var style = options.style;
+    style.fg = options.fg orelse options.color orelse style.fg;
+    style.bg = options.bg orelse options.background orelse style.bg;
+    style.size = options.size orelse options.font_size orelse style.size;
+    style.weight = options.weight orelse options.font_weight orelse style.weight;
+
     return .{
         .button = .{
             .label = title,
             .on_click = options.on_click,
+            .style = style,
         },
     };
 }
@@ -267,6 +435,17 @@ fn printIndent(indent: usize) void {
 test "text creates a text node" {
     const node = text("Hello");
     try std.testing.expectEqualStrings("Hello", node.text.value);
+}
+
+test "colors create rgb and rgba values" {
+    const blue = Color.rgb(1, 2, 3);
+    try std.testing.expectEqual(@as(u8, 1), blue.r);
+    try std.testing.expectEqual(@as(u8, 2), blue.g);
+    try std.testing.expectEqual(@as(u8, 3), blue.b);
+    try std.testing.expectEqual(@as(u8, 255), blue.a);
+
+    const translucent = Color.rgba(1, 2, 3, 4);
+    try std.testing.expectEqual(@as(u8, 4), translucent.a);
 }
 
 test "button creates a button node" {
@@ -359,6 +538,67 @@ test "textFmt formats text with the active build arena" {
     try std.testing.expectEqualStrings("Count: 5", node.text.value);
 }
 
+test "styledText stores text style" {
+    const node = styledText(.{
+        .value = "Title",
+        .style = .{
+            .color = colors.blue_600,
+            .background = colors.slate_50,
+            .font_size = 24,
+            .font_weight = .bold,
+        },
+    });
+
+    try std.testing.expectEqualStrings("Title", node.text.value);
+    try std.testing.expectEqual(@as(u16, 24), node.text.style.font_size);
+    try std.testing.expectEqual(FontWeight.bold, node.text.style.font_weight);
+    try std.testing.expectEqual(colors.blue_600.r, node.text.style.color.?.r);
+}
+
+test "short style aliases resolve to the same style model" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    active_allocator = arena.allocator();
+    defer active_allocator = null;
+
+    const text_node = t("Title", .{
+        .fg = colors.white,
+        .bg = colors.blue_600,
+        .size = 22,
+        .weight = .semibold,
+    });
+
+    try std.testing.expectEqual(colors.white.r, text_node.text.style.foreground().?.r);
+    try std.testing.expectEqual(colors.blue_600.b, text_node.text.style.fill().?.b);
+    try std.testing.expectEqual(@as(u16, 22), text_node.text.style.fontSize());
+    try std.testing.expectEqual(FontWeight.semibold, text_node.text.style.fontWeight());
+
+    const container = column(.{ .p = 12, .m = 4, .bg = colors.slate_900 }, .{
+        text("A"),
+    });
+
+    try std.testing.expectEqual(@as(u16, 12), container.view.style.paddingValue());
+    try std.testing.expectEqual(@as(u16, 4), container.view.style.marginValue());
+    try std.testing.expectEqual(colors.slate_900.g, container.view.style.fill().?.g);
+}
+
+test "button accepts flattened style aliases" {
+    const node = button(.{
+        .title = "Save",
+        .fg = colors.white,
+        .bg = colors.emerald_600,
+        .size = 16,
+        .weight = .bold,
+    });
+
+    try std.testing.expectEqualStrings("Save", node.button.label);
+    try std.testing.expectEqual(colors.white.r, node.button.style.foreground().?.r);
+    try std.testing.expectEqual(colors.emerald_600.g, node.button.style.fill().?.g);
+    try std.testing.expectEqual(@as(u16, 16), node.button.style.fontSize());
+    try std.testing.expectEqual(FontWeight.bold, node.button.style.fontWeight());
+}
+
 test "stateText renders current state through a formatter" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -417,4 +657,22 @@ test "controlCount counts native text and button controls" {
     });
 
     try std.testing.expectEqual(@as(usize, 4), node.controlCount());
+}
+
+test "viewCount counts logical views for background painting" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    active_allocator = arena.allocator();
+    defer active_allocator = null;
+
+    const node = column(.{ .background = colors.slate_50 }, .{
+        text("A"),
+        row(.{ .margin = 8 }, .{
+            text("B"),
+            text("C"),
+        }),
+    });
+
+    try std.testing.expectEqual(@as(usize, 2), node.viewCount());
 }

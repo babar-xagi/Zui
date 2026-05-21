@@ -6,6 +6,9 @@ const HICON = ?*anyopaque;
 const HCURSOR = ?*anyopaque;
 const HBRUSH = ?*anyopaque;
 const HMENU = ?*anyopaque;
+const HDC = ?*anyopaque;
+const HFONT = ?*anyopaque;
+const HGDIOBJ = ?*anyopaque;
 const LPCWSTR = [*:0]const u16;
 const UINT = u32;
 const DWORD = u32;
@@ -52,6 +55,15 @@ const WNDCLASSEXW = extern struct {
     hIconSm: HICON,
 };
 
+const PAINTSTRUCT = extern struct {
+    hdc: HDC,
+    fErase: BOOL,
+    rcPaint: RECT,
+    fRestore: BOOL,
+    fIncUpdate: BOOL,
+    rgbReserved: [32]u8,
+};
+
 const LayoutRect = struct {
     x: i32,
     y: i32,
@@ -63,7 +75,11 @@ const StateHeader = struct {
     relayout: *const fn (*StateHeader, HWND) void,
     refresh: *const fn (*StateHeader, HWND) void,
     command: *const fn (*StateHeader, u16) void,
+    paint: *const fn (*StateHeader, HDC) void,
+    control_color: *const fn (*StateHeader, HWND, HDC) LRESULT,
 };
+
+const COLORREF = u32;
 
 const ControlKind = enum {
     text,
@@ -75,6 +91,18 @@ const NativeControl = struct {
     kind: ControlKind,
     id: u16 = 0,
     on_click: ?*const fn () void = null,
+    text_color: ?COLORREF = null,
+    background: ?COLORREF = null,
+    background_brush: HBRUSH = null,
+    inherited_background: ?COLORREF = null,
+    inherited_background_brush: HBRUSH = null,
+    font: HFONT = null,
+    height: i32,
+};
+
+const ViewBackground = struct {
+    rect: LayoutRect,
+    background: ?COLORREF = null,
 };
 
 fn BackendState(comptime Node: type) type {
@@ -83,6 +111,7 @@ fn BackendState(comptime Node: type) type {
         allocator: std.mem.Allocator,
         root: Node,
         controls: []NativeControl,
+        view_backgrounds: []ViewBackground,
     };
 }
 
@@ -110,11 +139,17 @@ const WS_OVERLAPPEDWINDOW = 0x00CF0000;
 const WS_CHILD = 0x40000000;
 const WS_VISIBLE = 0x10000000;
 const WM_DESTROY = 0x0002;
+const WM_PAINT = 0x000F;
 const WM_SIZE = 0x0005;
 const WM_COMMAND = 0x0111;
+const WM_SETFONT = 0x0030;
+const WM_CTLCOLORBTN = 0x0135;
+const WM_CTLCOLORSTATIC = 0x0138;
 const GWLP_USERDATA = -21;
 const COLOR_WINDOW = 5;
 const BN_CLICKED = 0;
+const TRANSPARENT = 1;
+const DEFAULT_CHARSET = 1;
 
 const default_window_width = 800;
 const default_window_height = 600;
@@ -145,12 +180,38 @@ extern "user32" fn TranslateMessage(lpMsg: *const MSG) callconv(.winapi) BOOL;
 extern "user32" fn DispatchMessageW(lpMsg: *const MSG) callconv(.winapi) LRESULT;
 extern "user32" fn DefWindowProcW(hWnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM) callconv(.winapi) LRESULT;
 extern "user32" fn PostQuitMessage(nExitCode: i32) callconv(.winapi) void;
+extern "user32" fn BeginPaint(hWnd: HWND, lpPaint: *PAINTSTRUCT) callconv(.winapi) HDC;
+extern "user32" fn EndPaint(hWnd: HWND, lpPaint: *const PAINTSTRUCT) callconv(.winapi) BOOL;
 extern "user32" fn GetClientRect(hWnd: HWND, lpRect: *RECT) callconv(.winapi) BOOL;
 extern "user32" fn GetSysColorBrush(nIndex: i32) callconv(.winapi) HBRUSH;
 extern "user32" fn MoveWindow(hWnd: HWND, x: i32, y: i32, nWidth: i32, nHeight: i32, bRepaint: BOOL) callconv(.winapi) BOOL;
 extern "user32" fn SetWindowTextW(hWnd: HWND, lpString: LPCWSTR) callconv(.winapi) BOOL;
+extern "user32" fn SendMessageW(hWnd: HWND, Msg: UINT, wParam: WPARAM, lParam: LPARAM) callconv(.winapi) LRESULT;
+extern "user32" fn InvalidateRect(hWnd: HWND, lpRect: ?*const RECT, bErase: BOOL) callconv(.winapi) BOOL;
 extern "user32" fn SetWindowLongPtrW(hWnd: HWND, nIndex: i32, dwNewLong: isize) callconv(.winapi) isize;
 extern "user32" fn GetWindowLongPtrW(hWnd: HWND, nIndex: i32) callconv(.winapi) isize;
+extern "gdi32" fn CreateSolidBrush(color: COLORREF) callconv(.winapi) HBRUSH;
+extern "gdi32" fn DeleteObject(ho: HGDIOBJ) callconv(.winapi) BOOL;
+extern "gdi32" fn FillRect(hdc: HDC, lprc: *const RECT, hbr: HBRUSH) callconv(.winapi) i32;
+extern "gdi32" fn SetTextColor(hdc: HDC, color: COLORREF) callconv(.winapi) COLORREF;
+extern "gdi32" fn SetBkColor(hdc: HDC, color: COLORREF) callconv(.winapi) COLORREF;
+extern "gdi32" fn SetBkMode(hdc: HDC, mode: i32) callconv(.winapi) i32;
+extern "gdi32" fn CreateFontW(
+    cHeight: i32,
+    cWidth: i32,
+    cEscapement: i32,
+    cOrientation: i32,
+    cWeight: i32,
+    bItalic: DWORD,
+    bUnderline: DWORD,
+    bStrikeOut: DWORD,
+    iCharSet: DWORD,
+    iOutPrecision: DWORD,
+    iClipPrecision: DWORD,
+    iQuality: DWORD,
+    iPitchAndFamily: DWORD,
+    pszFaceName: ?LPCWSTR,
+) callconv(.winapi) HFONT;
 
 pub fn run(app: anytype) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -178,7 +239,7 @@ pub fn run(app: anytype) !void {
     ) orelse return Error.WindowCreationFailed;
 
     const state = try createBackendState(Node, allocator, app.root);
-    _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, @as(isize, @intCast(@intFromPtr(&state.header))));
+    _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, pointerToLResult(&state.header));
     active_header = &state.header;
     active_hwnd = hwnd;
     app.set_invalidator(refreshActiveWindow);
@@ -236,10 +297,13 @@ fn createBackendState(comptime Node: type, allocator: std.mem.Allocator, root: N
             .relayout = relayoutHeader(Node),
             .refresh = refreshHeader(Node),
             .command = commandHeader(Node),
+            .paint = paintHeader(Node),
+            .control_color = controlColorHeader(Node),
         },
         .allocator = allocator,
         .root = root,
         .controls = try allocator.alloc(NativeControl, root.controlCount()),
+        .view_backgrounds = try allocator.alloc(ViewBackground, root.viewCount()),
     };
     return state;
 }
@@ -268,6 +332,8 @@ fn createNativeControlsForNode(
     switch (node) {
         .text => |text_node| {
             const text = std.unicode.utf8ToUtf16LeAllocZ(allocator, text_node.value) catch return Error.InvalidUtf8;
+            const background = optionalColorToRef(text_node.style.fill());
+            const font = try createFont(allocator, text_node.style);
             const text_hwnd = CreateWindowExW(
                 0,
                 static_class.ptr,
@@ -282,15 +348,23 @@ fn createNativeControlsForNode(
                 instance,
                 null,
             ) orelse return Error.ControlCreationFailed;
+            applyFont(text_hwnd, font);
 
             controls[next_index.*] = .{
                 .hwnd = text_hwnd,
                 .kind = .text,
+                .text_color = optionalColorToRef(text_node.style.foreground()),
+                .background = background,
+                .background_brush = createOptionalBrush(background),
+                .font = font,
+                .height = textHeight(text_node.style),
             };
             next_index.* += 1;
         },
         .button => |button_node| {
             const label = std.unicode.utf8ToUtf16LeAllocZ(allocator, button_node.label) catch return Error.InvalidUtf8;
+            const background = optionalColorToRef(button_node.style.fill());
+            const font = try createFont(allocator, button_node.style);
             const control_id: u16 = @intCast(first_control_id + next_index.*);
             const button_hwnd = CreateWindowExW(
                 0,
@@ -306,12 +380,18 @@ fn createNativeControlsForNode(
                 instance,
                 null,
             ) orelse return Error.ControlCreationFailed;
+            applyFont(button_hwnd, font);
 
             controls[next_index.*] = .{
                 .hwnd = button_hwnd,
                 .kind = .button,
                 .id = control_id,
                 .on_click = button_node.on_click,
+                .text_color = optionalColorToRef(button_node.style.foreground()),
+                .background = background,
+                .background_brush = createOptionalBrush(background),
+                .font = font,
+                .height = buttonHeight(button_node.style),
             };
             next_index.* += 1;
         },
@@ -320,6 +400,79 @@ fn createNativeControlsForNode(
                 try createNativeControlsForNode(Node, allocator, instance, parent, child, controls, next_index);
             }
         },
+    }
+}
+
+fn optionalColorToRef(maybe_color: anytype) ?COLORREF {
+    if (maybe_color) |color| {
+        return colorToRef(color);
+    }
+    return null;
+}
+
+fn colorToRef(color: anytype) COLORREF {
+    return @as(COLORREF, color.r) |
+        (@as(COLORREF, color.g) << 8) |
+        (@as(COLORREF, color.b) << 16);
+}
+
+fn createOptionalBrush(color: ?COLORREF) HBRUSH {
+    if (color) |value| {
+        return CreateSolidBrush(value);
+    }
+    return null;
+}
+
+fn createFont(allocator: std.mem.Allocator, style: anytype) !HFONT {
+    if (style.fontSize() == 14 and style.fontWeight() == .regular and style.font_family == null) {
+        return null;
+    }
+
+    const face_name = if (style.font_family) |family|
+        (std.unicode.utf8ToUtf16LeAllocZ(allocator, family) catch return Error.InvalidUtf8).ptr
+    else
+        null;
+
+    return CreateFontW(
+        -@as(i32, @intCast(style.fontSize())),
+        0,
+        0,
+        0,
+        fontWeightToWin32(style.fontWeight()),
+        0,
+        0,
+        0,
+        DEFAULT_CHARSET,
+        0,
+        0,
+        0,
+        0,
+        face_name,
+    );
+}
+
+fn textHeight(style: anytype) i32 {
+    const size: i32 = @intCast(style.fontSize());
+    return @max(default_text_height, size + 12);
+}
+
+fn buttonHeight(style: anytype) i32 {
+    const size: i32 = @intCast(style.fontSize());
+    return @max(default_button_height, size + 18);
+}
+
+fn fontWeightToWin32(weight: anytype) i32 {
+    return switch (weight) {
+        .regular => 400,
+        .medium => 500,
+        .semibold => 600,
+        .bold => 700,
+    };
+}
+
+fn applyFont(hwnd: HWND, font: HFONT) void {
+    if (font) |value| {
+        _ = SendMessageW(hwnd, WM_SETFONT, @intFromPtr(value), 1);
     }
 }
 
@@ -357,6 +510,79 @@ fn commandHeader(comptime Node: type) *const fn (*StateHeader, u16) void {
     }.command;
 }
 
+fn paintHeader(comptime Node: type) *const fn (*StateHeader, HDC) void {
+    return struct {
+        fn paint(header: *StateHeader, hdc: HDC) void {
+            const state: *BackendState(Node) = @fieldParentPtr("header", header);
+            paintViewBackgrounds(state, hdc);
+        }
+    }.paint;
+}
+
+fn controlColorHeader(comptime Node: type) *const fn (*StateHeader, HWND, HDC) LRESULT {
+    return struct {
+        fn controlColor(header: *StateHeader, control_hwnd: HWND, hdc: HDC) LRESULT {
+            const state: *BackendState(Node) = @fieldParentPtr("header", header);
+            for (state.controls) |control| {
+                if (control.hwnd == control_hwnd) {
+                    if (control.text_color) |text_color| {
+                        _ = SetTextColor(hdc, text_color);
+                    }
+
+                    if (effectiveControlBackground(control)) |background| {
+                        _ = SetBkColor(hdc, background);
+                        return brushToResult(effectiveControlBackgroundBrush(control));
+                    }
+
+                    _ = SetBkMode(hdc, TRANSPARENT);
+                    return brushToResult(GetSysColorBrush(COLOR_WINDOW));
+                }
+            }
+
+            return brushToResult(GetSysColorBrush(COLOR_WINDOW));
+        }
+    }.controlColor;
+}
+
+fn paintViewBackgrounds(state: anytype, hdc: HDC) void {
+    for (state.view_backgrounds) |view_background| {
+        const background = view_background.background orelse continue;
+        const brush = CreateSolidBrush(background) orelse continue;
+        var rect = toWin32Rect(view_background.rect);
+        _ = FillRect(hdc, &rect, brush);
+        _ = DeleteObject(brush);
+    }
+}
+
+fn brushToResult(brush: HBRUSH) LRESULT {
+    if (brush) |value| {
+        return pointerToLResult(value);
+    }
+    return 0;
+}
+
+fn pointerToLResult(pointer: *anyopaque) LRESULT {
+    return @as(LRESULT, @bitCast(@intFromPtr(pointer)));
+}
+
+fn updateInheritedBackground(control: *NativeControl, background: ?COLORREF) void {
+    if (control.background != null) return;
+    if (control.inherited_background == background) return;
+
+    control.inherited_background = background;
+    control.inherited_background_brush = createOptionalBrush(background);
+}
+
+fn effectiveControlBackground(control: NativeControl) ?COLORREF {
+    return control.background orelse control.inherited_background;
+}
+
+fn effectiveControlBackgroundBrush(control: NativeControl) HBRUSH {
+    if (control.background_brush != null) return control.background_brush;
+    if (control.inherited_background_brush != null) return control.inherited_background_brush;
+    return GetSysColorBrush(COLOR_WINDOW);
+}
+
 fn refreshActiveWindow() void {
     if (active_header) |header| {
         if (active_hwnd != null) {
@@ -382,8 +608,10 @@ fn relayoutWindow(comptime Node: type, state: *BackendState(Node), hwnd: HWND) v
             .height = default_window_height,
         };
 
-    var next_index: usize = 0;
-    _ = layoutNode(Node, state.root, state.controls, &next_index, rect);
+    var next_control_index: usize = 0;
+    var next_view_index: usize = 0;
+    _ = layoutNode(Node, state, state.root, &next_control_index, &next_view_index, rect, null);
+    _ = InvalidateRect(hwnd, null, 1);
 }
 
 fn refreshWindow(comptime Node: type, state: *BackendState(Node), hwnd: HWND) !void {
@@ -421,16 +649,35 @@ fn refreshNode(
     }
 }
 
+fn shrinkRect(rect: LayoutRect, amount: i32) LayoutRect {
+    return .{
+        .x = rect.x + amount,
+        .y = rect.y + amount,
+        .width = @max(1, rect.width - amount * 2),
+        .height = @max(1, rect.height - amount * 2),
+    };
+}
+
+fn toWin32Rect(rect: LayoutRect) RECT {
+    return .{
+        .left = rect.x,
+        .top = rect.y,
+        .right = rect.x + @max(1, rect.width),
+        .bottom = rect.y + @max(1, rect.height),
+    };
+}
+
 fn measureNode(comptime Node: type, node: Node, available_width: i32) i32 {
     return switch (node) {
-        .text => default_text_height,
-        .button => default_button_height,
+        .text => |text_node| textHeight(text_node.style),
+        .button => |button_node| buttonHeight(button_node.style),
         .view => |view_node| {
-            const padding: i32 = @intCast(view_node.style.padding);
+            const padding: i32 = @intCast(view_node.style.paddingValue());
+            const margin: i32 = @intCast(view_node.style.marginValue());
             const gap: i32 = @intCast(view_node.style.gap);
-            if (view_node.children.len == 0) return padding * 2;
+            if (view_node.children.len == 0) return padding * 2 + margin * 2;
 
-            return switch (view_node.style.direction) {
+            const content_height = switch (view_node.style.direction) {
                 .column => blk: {
                     var height = padding * 2 + gap * @as(i32, @intCast(view_node.children.len - 1));
                     for (view_node.children) |child| {
@@ -446,47 +693,96 @@ fn measureNode(comptime Node: type, node: Node, available_width: i32) i32 {
                     break :blk height + padding * 2;
                 },
             };
+            return content_height + margin * 2;
         },
     };
 }
 
-fn layoutNode(comptime Node: type, node: Node, controls: []NativeControl, next_index: *usize, rect: LayoutRect) i32 {
+fn layoutNode(
+    comptime Node: type,
+    state: *BackendState(Node),
+    node: Node,
+    next_control_index: *usize,
+    next_view_index: *usize,
+    rect: LayoutRect,
+    inherited_background: ?COLORREF,
+) i32 {
     return switch (node) {
         .text => {
-            const control = controls[next_index.*];
-            next_index.* += 1;
+            const control = &state.controls[next_control_index.*];
+            next_control_index.* += 1;
+            updateInheritedBackground(control, inherited_background);
             _ = MoveWindow(
                 control.hwnd,
                 rect.x,
                 rect.y,
                 @max(1, rect.width),
-                default_text_height,
+                control.height,
                 1,
             );
-            return default_text_height;
+            return control.height;
         },
         .button => {
-            const control = controls[next_index.*];
-            next_index.* += 1;
+            const control = &state.controls[next_control_index.*];
+            next_control_index.* += 1;
+            updateInheritedBackground(control, inherited_background);
             _ = MoveWindow(
                 control.hwnd,
                 rect.x,
                 rect.y,
                 @max(1, rect.width),
-                default_button_height,
+                control.height,
                 1,
             );
-            return default_button_height;
+            return control.height;
         },
-        .view => |view_node| switch (view_node.style.direction) {
-            .column => layoutColumn(Node, view_node, controls, next_index, rect),
-            .row => layoutRow(Node, view_node, controls, next_index, rect),
-        },
+        .view => |view_node| layoutView(Node, state, view_node, next_control_index, next_view_index, rect, inherited_background),
     };
 }
 
-fn layoutColumn(comptime Node: type, view_node: anytype, controls: []NativeControl, next_index: *usize, rect: LayoutRect) i32 {
-    const padding: i32 = @intCast(view_node.style.padding);
+fn layoutView(
+    comptime Node: type,
+    state: *BackendState(Node),
+    view_node: anytype,
+    next_control_index: *usize,
+    next_view_index: *usize,
+    rect: LayoutRect,
+    inherited_background: ?COLORREF,
+) i32 {
+    const margin: i32 = @intCast(view_node.style.marginValue());
+    const view_rect = shrinkRect(rect, margin);
+    const background_index = next_view_index.*;
+    next_view_index.* += 1;
+    const view_background = optionalColorToRef(view_node.style.fill()) orelse inherited_background;
+
+    const used_height = switch (view_node.style.direction) {
+        .column => layoutColumn(Node, state, view_node, next_control_index, next_view_index, view_rect, view_background),
+        .row => layoutRow(Node, state, view_node, next_control_index, next_view_index, view_rect, view_background),
+    };
+
+    state.view_backgrounds[background_index] = .{
+        .rect = .{
+            .x = view_rect.x,
+            .y = view_rect.y,
+            .width = view_rect.width,
+            .height = @min(view_rect.height, @max(1, used_height)),
+        },
+        .background = view_background,
+    };
+
+    return used_height + margin * 2;
+}
+
+fn layoutColumn(
+    comptime Node: type,
+    state: *BackendState(Node),
+    view_node: anytype,
+    next_control_index: *usize,
+    next_view_index: *usize,
+    rect: LayoutRect,
+    inherited_background: ?COLORREF,
+) i32 {
+    const padding: i32 = @intCast(view_node.style.paddingValue());
     const gap: i32 = @intCast(view_node.style.gap);
     const child_x = rect.x + padding;
     const child_width = @max(1, rect.width - padding * 2);
@@ -499,12 +795,12 @@ fn layoutColumn(comptime Node: type, view_node: anytype, controls: []NativeContr
             used_height += gap;
         }
 
-        const child_height = layoutNode(Node, child, controls, next_index, .{
+        const child_height = layoutNode(Node, state, child, next_control_index, next_view_index, .{
             .x = child_x,
             .y = y,
             .width = child_width,
             .height = @max(1, rect.height - used_height - padding),
-        });
+        }, inherited_background);
 
         y += child_height;
         used_height += child_height;
@@ -513,8 +809,16 @@ fn layoutColumn(comptime Node: type, view_node: anytype, controls: []NativeContr
     return used_height + padding;
 }
 
-fn layoutRow(comptime Node: type, view_node: anytype, controls: []NativeControl, next_index: *usize, rect: LayoutRect) i32 {
-    const padding: i32 = @intCast(view_node.style.padding);
+fn layoutRow(
+    comptime Node: type,
+    state: *BackendState(Node),
+    view_node: anytype,
+    next_control_index: *usize,
+    next_view_index: *usize,
+    rect: LayoutRect,
+    inherited_background: ?COLORREF,
+) i32 {
+    const padding: i32 = @intCast(view_node.style.paddingValue());
     const gap: i32 = @intCast(view_node.style.gap);
     if (view_node.children.len == 0) return padding * 2;
 
@@ -529,12 +833,12 @@ fn layoutRow(comptime Node: type, view_node: anytype, controls: []NativeControl,
     for (view_node.children, 0..) |child, index| {
         if (index > 0) x += gap;
 
-        const used_height = layoutNode(Node, child, controls, next_index, .{
+        const used_height = layoutNode(Node, state, child, next_control_index, next_view_index, .{
             .x = x,
             .y = rect.y + padding,
             .width = child_width,
             .height = child_height,
-        });
+        }, inherited_background);
 
         measured_height = @max(measured_height, used_height);
         x += child_width;
@@ -551,13 +855,40 @@ fn highWord(value: WPARAM) u16 {
     return @intCast((value >> 16) & 0xffff);
 }
 
+fn hwndFromLParam(value: LPARAM) HWND {
+    return @ptrFromInt(@as(usize, @bitCast(value)));
+}
+
+fn hdcFromWParam(value: WPARAM) HDC {
+    return @ptrFromInt(value);
+}
+
+fn stateHeaderFromWindow(hwnd: HWND) ?*StateHeader {
+    const raw_state = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    if (raw_state == 0) return null;
+    return @ptrFromInt(@as(usize, @bitCast(raw_state)));
+}
+
 fn windowProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.winapi) LRESULT {
     switch (msg) {
+        WM_PAINT => {
+            var paint: PAINTSTRUCT = undefined;
+            const hdc = BeginPaint(hwnd, &paint);
+            if (stateHeaderFromWindow(hwnd)) |header| {
+                header.paint(header, hdc);
+            }
+            _ = EndPaint(hwnd, &paint);
+            return 0;
+        },
+        WM_CTLCOLORSTATIC, WM_CTLCOLORBTN => {
+            if (stateHeaderFromWindow(hwnd)) |header| {
+                return header.control_color(header, hwndFromLParam(lparam), hdcFromWParam(wparam));
+            }
+            return brushToResult(GetSysColorBrush(COLOR_WINDOW));
+        },
         WM_COMMAND => {
             if (highWord(wparam) == BN_CLICKED) {
-                const raw_state = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-                if (raw_state != 0) {
-                    const header: *StateHeader = @ptrFromInt(@as(usize, @intCast(raw_state)));
+                if (stateHeaderFromWindow(hwnd)) |header| {
                     header.command(header, lowWord(wparam));
                 }
                 return 0;
@@ -565,9 +896,7 @@ fn windowProc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) callconv(.w
             return DefWindowProcW(hwnd, msg, wparam, lparam);
         },
         WM_SIZE => {
-            const raw_state = GetWindowLongPtrW(hwnd, GWLP_USERDATA);
-            if (raw_state != 0) {
-                const header: *StateHeader = @ptrFromInt(@as(usize, @intCast(raw_state)));
+            if (stateHeaderFromWindow(hwnd)) |header| {
                 header.relayout(header, hwnd);
             }
             return 0;
