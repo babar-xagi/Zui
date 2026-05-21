@@ -34,6 +34,29 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the hello example");
     run_step.dependOn(&run_hello.step);
 
+    const interactive_button = b.addExecutable(.{
+        .name = "zui-004-interactive-button",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/004_interactive_button.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zui", .module = zui_mod },
+            },
+        }),
+    });
+    addPlatformLinks(interactive_button.root_module, target);
+    b.installArtifact(interactive_button);
+
+    const run_interactive_button = b.addRunArtifact(interactive_button);
+    run_interactive_button.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_interactive_button.addArgs(args);
+    }
+
+    const run_button_step = b.step("run-button", "Run the phase 004 interactive button example");
+    run_button_step.dependOn(&run_interactive_button.step);
+
     const test_mod = b.createModule(.{
         .root_source_file = b.path("src/zui.zig"),
         .target = target,

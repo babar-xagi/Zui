@@ -23,6 +23,18 @@ pub const TextNode = struct {
     value: []const u8,
 };
 
+pub const ClickHandler = *const fn () void;
+
+pub const ButtonOptions = struct {
+    label: []const u8,
+    on_click: ?ClickHandler = null,
+};
+
+pub const ButtonNode = struct {
+    label: []const u8,
+    on_click: ?ClickHandler,
+};
+
 pub const ViewNode = struct {
     style: ViewStyle,
     children: []const Node,
@@ -30,12 +42,14 @@ pub const ViewNode = struct {
 
 pub const Node = union(enum) {
     text: TextNode,
+    button: ButtonNode,
     view: ViewNode,
 
     pub fn debugPrint(self: Node, indent: usize) void {
         printIndent(indent);
         switch (self) {
             .text => |node| std.debug.print("Text(\"{s}\")\n", .{node.value}),
+            .button => |node| std.debug.print("Button(\"{s}\")\n", .{node.label}),
             .view => |node| {
                 std.debug.print(
                     "View(direction={s}, gap={}, padding={})\n",
@@ -51,6 +65,7 @@ pub const Node = union(enum) {
     pub fn firstText(self: Node) ?[]const u8 {
         return switch (self) {
             .text => |node| node.value,
+            .button => |node| node.label,
             .view => |node| {
                 for (node.children) |child| {
                     if (child.firstText()) |value| {
@@ -65,10 +80,24 @@ pub const Node = union(enum) {
     pub fn textCount(self: Node) usize {
         return switch (self) {
             .text => 1,
+            .button => 0,
             .view => |node| {
                 var count: usize = 0;
                 for (node.children) |child| {
                     count += child.textCount();
+                }
+                return count;
+            },
+        };
+    }
+
+    pub fn controlCount(self: Node) usize {
+        return switch (self) {
+            .text, .button => 1,
+            .view => |node| {
+                var count: usize = 0;
+                for (node.children) |child| {
+                    count += child.controlCount();
                 }
                 return count;
             },
@@ -128,6 +157,15 @@ pub fn text(value: []const u8) Node {
     };
 }
 
+pub fn button(options: ButtonOptions) Node {
+    return .{
+        .button = .{
+            .label = options.label,
+            .on_click = options.on_click,
+        },
+    };
+}
+
 fn printIndent(indent: usize) void {
     for (0..indent) |_| {
         std.debug.print(" ", .{});
@@ -137,6 +175,12 @@ fn printIndent(indent: usize) void {
 test "text creates a text node" {
     const node = text("Hello");
     try std.testing.expectEqualStrings("Hello", node.text.value);
+}
+
+test "button creates a button node" {
+    const node = button(.{ .label = "Press" });
+    try std.testing.expectEqualStrings("Press", node.button.label);
+    try std.testing.expectEqual(@as(?ClickHandler, null), node.button.on_click);
 }
 
 test "view stores children in the active build arena" {
@@ -193,6 +237,11 @@ test "firstText returns first nested text node" {
     try std.testing.expectEqualStrings("Nested", node.firstText().?);
 }
 
+test "firstText can use a button label" {
+    const node = button(.{ .label = "Launch" });
+    try std.testing.expectEqualStrings("Launch", node.firstText().?);
+}
+
 test "textCount counts nested text nodes" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -209,4 +258,23 @@ test "textCount counts nested text nodes" {
     });
 
     try std.testing.expectEqual(@as(usize, 3), node.textCount());
+}
+
+test "controlCount counts native text and button controls" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    active_allocator = arena.allocator();
+    defer active_allocator = null;
+
+    const node = view(.{}, .{
+        text("A"),
+        button(.{ .label = "B" }),
+        view(.{}, .{
+            text("C"),
+            button(.{ .label = "D" }),
+        }),
+    });
+
+    try std.testing.expectEqual(@as(usize, 4), node.controlCount());
 }
